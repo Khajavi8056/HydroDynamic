@@ -1,0 +1,15 @@
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.csproj.AssemblyReference.cache
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.AssemblyInfoInputs.cache
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.AssemblyInfo.cs
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.csproj.CoreCompileInputs.cache
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\bin\Debug\net6.0\HydrodynamicBot.deps.json
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\bin\Debug\net6.0\HydrodynamicBot.dll
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\bin\Debug\net6.0\ref\HydrodynamicBot.dll
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\bin\Debug\net6.0\HydrodynamicBot.pdb
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\bin\Debug\net6.0\HydrodynamicTrendEngine.dll
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\bin\Debug\net6.0\HydrodynamicTrendEngine.pdb
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.csproj.CopyComplete
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.dll
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\ref\HydrodynamicBot.dll
+C:\Users\hp\Documents\cAlgo\Sources\Robots\HydrodynamicBot\HydrodynamicBot\obj\Debug\net6.0\HydrodynamicBot.pdb

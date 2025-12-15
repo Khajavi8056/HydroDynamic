@@ -1,0 +1,16 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ObfuscationEnabled>True</ObfuscationEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="cTrader.Automate" Version="*" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Indicators\HydrodynamicTrendEngine\HydrodynamicTrendEngine\HydrodynamicTrendEngine.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\Indicators\StreetQuant_Physics\StreetQuant_Physics\StreetQuant_Physics.csproj" />
+  </ItemGroup>
+</Project>
