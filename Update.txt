@@ -1,3 +1,94 @@
+محمد جان، برای اینکه کد کاملاً سالم شود و هیچ خطای کامپایلی نداشته باشی، این ۵ مرحله را با دقت انجام بده. من دقیقاً کدی که الان داری و کدی که باید جایش بگذاری را برایت جدا کردم:
+۱. اصلاح پارامتر ورودی (بخش تنظیمات خروج)
+در ابتدای کد، بخش // گروه 6: استراتژی خروج را پیدا کن.
+🔴 کد فعلی (ناقص):
+[Parameter(" Close %", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
+public double Percent { get; set; }
+
+✅ جایگزین کن با این:
+[Parameter("TP1 Close %", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
+public double TP1Percent { get; set; }
+
+۲. اصلاح کلاس اطلاعات معامله (TradeContext)
+کلاس private class TradeContext را در اواسط کد پیدا کن.
+🔴 کد فعلی (ناقص):
+public double  { get; set; }
+public double TP2 { get; set; }
+public bool Hit { get; set; }
+
+✅ جایگزین کن با این:
+public double TP1 { get; set; }
+public double TP2 { get; set; }
+public bool TP1Hit { get; set; }
+
+۳. اصلاح تابع ExecuteTrade (ثبت اهداف معامله)
+در اواخر کد، داخل تابع private void ExecuteTrade(int trendState) بخش ثبت Context را پیدا کن.
+🔴 کد فعلی (ناقص):
+double  = _pZero;
+// ...
+_activeTrades[result.Position.Id] = new TradeContext
+{
+    // ...
+    TP1 = ,
+    TP2 = tp2,
+    Hit = false,
+    // ...
+};
+
+✅ جایگزین کن با این:
+double tp1 = _pZero;
+// ...
+_activeTrades[result.Position.Id] = new TradeContext
+{
+    // ...
+    TP1 = tp1,
+    TP2 = tp2,
+    TP1Hit = false,
+    // ...
+};
+
+(و در خطوط پایین‌ترِ همین تابع، در بخش _logger.Info مقدار TP1: {tp1:F5} را کامل بنویس).
+۴. اصلاح شرط برخورد با تارگت اول (ManagePositions)
+داخل تابع private void ManagePositions() بخش مربوط به LEVEL 2: TP1 را پیدا کن.
+🔴 کد فعلی (ناقص):
+if (!ctx.Hit)
+{
+    bool Hit = pos.TradeType == TradeType.Buy ? 
+        price >= ctx. : price <= ctx.;
+    
+    if (Hit)
+    {
+        double closeVol = pos.VolumeInUnits * (Percent / 100.0);
+
+✅ جایگزین کن با این:
+if (!ctx.TP1Hit)
+{
+    bool tp1Hit = pos.TradeType == TradeType.Buy ? 
+        price >= ctx.TP1 : price <= ctx.TP1;
+    
+    if (tp1Hit)
+    {
+        double closeVol = pos.VolumeInUnits * (TP1Percent / 100.0);
+
+۵. اصلاح نهایی برای سود ۵۰/۵۰ (چند خط پایین‌تر)
+در ادامه همان بخش بالا (داخل شرط if (tp1Hit))، خط مربوط به اصلاح پوزیشن را چک کن.
+🔴 کد فعلی:
+ctx.Hit = true;
+ctx.TrailingActive = true;
+ModifyPositionSafe(pos, ctx.EntryPrice, ctx.TP2); 
+_logger.Info($"✅  HIT - Pos {pos.Id}");
+
+✅ جایگزین کن با این:
+ctx.TP1Hit = true;
+ctx.TrailingActive = true;
+ModifyPositionSafe(pos, ctx.EntryPrice, ctx.TP2); 
+_logger.Info($"✅ TP1 HIT - Stop moved to Entry. Aiming for TP2: {ctx.TP2:F5}");
+
+🛡️ چک نهایی
+ * تغییر Percent به TP1Percent
+ * تغییر Hit به TP1Hit
+ * تغییر ctx. به ctx.TP1
+با این اصلاحات، کد کاملاً یکپارچه می‌شود و دقیقاً همان استراتژی ۵۰/۵۰ که صحبت کردیم را اجرا می‌کند. برو برای Build نهایی! 🚀✌️
 
 // ══════════════════════════════════════════════════════════════════════════════
 // 🤖 ربات معاملاتی HydroDynamic - نسخه 8.2 نهایی اصلاح شده
