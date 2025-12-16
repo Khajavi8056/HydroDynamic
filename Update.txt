@@ -498,15 +498,19 @@ public double ToxicityThreshold { get; set; }
                 // محاسبه داده‌های تاریخی
                 _logger.Info($"⏳ Calculating {Bars.Count} bars...");
                 
-                for (int i = 0; i < Bars.Count; i++)
+                                // محاسبه داده‌های تاریخی (فقط ۵۰۰ کندل آخر برای جلوگیری از کرش)
+                int lookback = 500;
+                int startIndex = Math.Max(0, Bars.Count - lookback);
+                
+                _logger.Info($"⏳ Warming up indicators (Last {lookback} bars)...");
+                
+                for (int i = startIndex; i < Bars.Count; i++)
                 {
                     CalculateTrend(i);
                     CalculateFD(i);
                     UpdatePZero(i);
-                    
-                    if (i % 1000 == 0 && i > 0)
-                        _logger.Debug($"Progress: {i}/{Bars.Count}");
                 }
+
                 
                 _logger.Info($"✅ Ready - {Bars.Count} bars processed");
                 
@@ -552,8 +556,10 @@ public double ToxicityThreshold { get; set; }
                 
                 // به‌روزرسانی  Monitor
                 UpdateToxicity();
-                UpdateDashboard();
-
+                  if (ShowDashboard) 
+                {
+                    try { UpdateDashboard(); } catch {} 
+                }
             }
             catch (Exception ex)
             {
