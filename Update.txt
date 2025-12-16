@@ -1703,7 +1703,7 @@ public double ToxicityThreshold { get; set; }
                 if (pos == null)
                     return null;
                 
-                return ModifyPosition(pos, sl, tp);
+                return ModifyPosition(pos, sl, tp, ProtectionType.Absolute);
 
             }
             catch (Exception ex)
@@ -2020,7 +2020,8 @@ public double ToxicityThreshold { get; set; }
 
     
     
-}
+     }
+ }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // پایان کد - HydroDynamic Trading Bot v8.2
