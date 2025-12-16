@@ -1,3 +1,4 @@
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 🤖 ربات معاملاتی HydroDynamic - نسخه 8.2 نهایی اصلاح شده
 // ══════════════════════════════════════════════════════════════════════════════
@@ -24,7 +25,7 @@ namespace cAlgo.Robots
     /// 
     /// خروج با 5 سطح دفاعی:
     /// 1. Hard Stop Loss
-    /// 2. Target Management (TP1 & TP2)
+    /// 2. Target Management ( & TP2)
     /// 3. Trailing Stop
     /// 4. Trend Reversal Exit
     /// 5. Time Stops
@@ -116,8 +117,8 @@ public double ToxicityThreshold { get; set; }
         // گروه 6: استراتژی خروج
         // ──────────────────────────────────────────────────────────────────────
         
-        [Parameter("TP1 Close %", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
-        public double TP1Percent { get; set; }
+        [Parameter(" Close %", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
+        public double Percent { get; set; }
         
         [Parameter("Ballistic Multiplier", DefaultValue = 1.618, MinValue = 1.0, MaxValue = 3.0, Group = "Exit")]
         public double BallisticMultiplier { get; set; }
@@ -374,9 +375,9 @@ public double ToxicityThreshold { get; set; }
             public double EntryPrice { get; set; }
             public double PZero { get; set; }
             public double Stretch { get; set; }
-            public double TP1 { get; set; }
+            public double  { get; set; }
             public double TP2 { get; set; }
-            public bool TP1Hit { get; set; }
+            public bool Hit { get; set; }
             public bool TP2Hit { get; set; }
             public bool TrailingActive { get; set; }
             public int EntryBarIndex { get; set; }
@@ -1393,7 +1394,7 @@ public double ToxicityThreshold { get; set; }
         /// اجرای معامله با:
         /// 1. محاسبه Stop Loss پویا
         /// 2. Position Sizing بر اساس ریسک
-        /// 3. محاسبه Targets (TP1, TP2)
+        /// 3. محاسبه Targets (, TP2)
         /// 4. ثبت Trade Context
         /// </summary>
         private void ExecuteTrade(int trendState)
@@ -1446,7 +1447,7 @@ public double ToxicityThreshold { get; set; }
                 // ─────────────────────────────────────────────────────
                 // 3. محاسبه Targets
                 // ─────────────────────────────────────────────────────
-                double tp1 = _pZero;
+                double  = _pZero;
                 double tp2 = dir == TradeType.Buy ? 
                     _pZero + (stretch * BallisticMultiplier) : 
                     _pZero - (stretch * BallisticMultiplier);
@@ -1468,9 +1469,9 @@ public double ToxicityThreshold { get; set; }
                             EntryPrice = price,
                             PZero = _pZero,
                             Stretch = stretch,
-                            TP1 = tp1,
+                             = ,
                             TP2 = tp2,
-                            TP1Hit = false,
+                            Hit = false,
                             TP2Hit = false,
                             TrailingActive = false,
                             EntryBarIndex = Bars.Count - 1,
@@ -1493,7 +1494,7 @@ public double ToxicityThreshold { get; set; }
                     _logger.Info($"Volume: {volume / 1000:F2} lots");
                     _logger.Info($"Stop: {slPips:F1} pips");
                     _logger.Info($"Risk: ${risk:F2}");
-                    _logger.Info($"TP1: {tp1:F5}");
+                    _logger.Info($": {:F5}");
                     _logger.Info($"TP2: {tp2:F5}");
                     _logger.Info("════════════════════════════════════════");
                 }
@@ -1514,7 +1515,7 @@ public double ToxicityThreshold { get; set; }
         /// <summary>
         /// مدیریت معاملات با 5 سطح دفاعی:
         /// 1. Hard Stop Loss
-        /// 2. Target Management (TP1 & TP2)
+        /// 2. Target Management ( & TP2)
         /// 3. Trailing Stop
         /// 4. Trend Reversal Exit
         /// 5. Time Stops
@@ -1568,7 +1569,7 @@ public double ToxicityThreshold { get; set; }
                     // ═════════════════════════════════════════════════
                     if (EnableTimeStops)
                     {
-                        if (!ctx.TP1Hit && bars > TimeStop1Bars)
+                        if (!ctx.Hit && bars > TimeStop1Bars)
                         {
                             _logger.Info($"⏰ TIME STOP 1 - Pos {pos.Id}");
                             ClosePositionSafe(pos);
@@ -1577,7 +1578,7 @@ public double ToxicityThreshold { get; set; }
                             continue;
                         }
                         
-                        if (ctx.TP1Hit && !ctx.TP2Hit && bars > TimeStop2Bars)
+                        if (ctx.Hit && !ctx.TP2Hit && bars > TimeStop2Bars)
                         {
                             _logger.Info($"⏰ TIME STOP 2 - Pos {pos.Id}");
                             ClosePositionSafe(pos);
@@ -1588,16 +1589,16 @@ public double ToxicityThreshold { get; set; }
                     }
                     
                     // ═════════════════════════════════════════════════
-                    // LEVEL 2: TP1
+                    // LEVEL 2: 
                     // ═════════════════════════════════════════════════
-                    if (!ctx.TP1Hit)
+                    if (!ctx.Hit)
                     {
-                        bool tp1Hit = pos.TradeType == TradeType.Buy ? 
-                            price >= ctx.TP1 : price <= ctx.TP1;
+                        bool Hit = pos.TradeType == TradeType.Buy ? 
+                            price >= ctx. : price <= ctx.;
                         
-                        if (tp1Hit)
+                        if (Hit)
                         {
-                            double closeVol = pos.VolumeInUnits * (TP1Percent / 100.0);
+                            double closeVol = pos.VolumeInUnits * (Percent / 100.0);
                             closeVol = Symbol.NormalizeVolumeInUnits(closeVol);
                             
                             if (closeVol >= Symbol.VolumeInUnitsMin && closeVol <= pos.VolumeInUnits)
@@ -1606,10 +1607,11 @@ public double ToxicityThreshold { get; set; }
                                 
                                 if (res != null && res.IsSuccessful)
                                 {
-                                    ctx.TP1Hit = true;
+                                    ctx.Hit = true;
                                     ctx.TrailingActive = true;
-                                    ModifyPositionSafe(pos, ctx.EntryPrice, null);
-                                    _logger.Info($"✅ TP1 HIT - Pos {pos.Id}");
+                                    ModifyPositionSafe(pos, ctx.EntryPrice, ctx.TP2); // ✅ یعنی استاپ بیاد رو ورود، ولی تارگت دوم بمونه
+
+                                    _logger.Info($"✅  HIT - Pos {pos.Id}");
                                 }
                             }
                         }
@@ -1618,7 +1620,7 @@ public double ToxicityThreshold { get; set; }
                     // ═════════════════════════════════════════════════
                     // LEVEL 2: TP2
                     // ═════════════════════════════════════════════════
-                    if (ctx.TP1Hit && !ctx.TP2Hit)
+                    if (ctx.Hit && !ctx.TP2Hit)
                     {
                         bool tp2Hit = pos.TradeType == TradeType.Buy ? 
                             price >= ctx.TP2 : price <= ctx.TP2;
