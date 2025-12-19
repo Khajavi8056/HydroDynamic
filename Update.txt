@@ -1,7 +1,14 @@
 // ══════════════════════════════════════════════════════════════════════════════
-// 🤖 ربات معاملاتی HydroDynamic - نسخه 8.2 نهایی اصلاح شده
+// 🤖 HydroDynamic Trading Bot - نسخه 9.0 (Remastered)
 // ══════════════════════════════════════════════════════════════════════════════
-
+// تغییرات اصلی:
+// ✅ حذف کامل Hurst Exponent
+// ✅ دو موتور Trend: Slope و Cross
+// ✅ شکارچی قله فرکتالی (Williams Fractal Logic)
+// ✅ دوگانه P-Zero (Buy & Sell)
+// ✅ مقایسه‌گر هوشمند (Correction vs Reversal)
+// ✅ سوئیچ‌های کنترلی برای Toxicity و Trigger
+// ══════════════════════════════════════════════════════════════════════════════
 
 using System;
 using System.Linq;
@@ -13,83 +20,93 @@ using cAlgo.API.Internals;
 
 namespace cAlgo.Robots
 {
-    /// <summary>
-    /// ربات معاملاتی Hydrodynamic
-    /// استراتژی 5 مرحله‌ای برای ورود به معامله:
-    /// 1. تشخیص Trend (SuperSmoother + Hurst Exponent)
-    /// 2. تشخیص Correction (Fractal Dimension)
-    /// 3. شناسایی P_zero (نقطه بازگشت)
-    /// 4. تأیید Timing (TIP - Tick Imbalance Pressure)
-    /// 5. بررسی سلامت بازار ( Monitor)
-    /// 
-    /// خروج با 5 سطح دفاعی:
-    /// 1. Hard Stop Loss
-    /// 2. Target Management (TP1 & TP2)
-    /// 3. Trailing Stop
-    /// 4. Trend Reversal Exit
-    /// 5. Time Stops
-    /// </summary>
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class HydroDynamicTradingBot : Robot
     {
         // ════════════════════════════════════════════════════════════════════════
-        // پارامترهای ورودی - قابل تنظیم توسط کاربر
+        // ENUMS
+        // ════════════════════════════════════════════════════════════════════════
+        
+        public enum TrendMode
+        {
+            Slope,    // شیب یک SuperSmoother
+            Cross     // تقاطع دو SuperSmoother
+        }
+        
+        public enum LogLevel
+        {
+            DEBUG = 0,
+            INFO = 1,
+            WARNING = 2,
+            ERROR = 3,
+            NONE = 4
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // پارامترهای ورودی
         // ════════════════════════════════════════════════════════════════════════
         
         // ──────────────────────────────────────────────────────────────────────
-        // گروه 1: تنظیمات Trend (تشخیص روند)
+        // گروه 1: تنظیمات Trend
         // ──────────────────────────────────────────────────────────────────────
         
-        [Parameter("Smooth Length", DefaultValue = 10, MinValue = 5, Group = "Trend")]
-        public int SmoothLength { get; set; }
+        [Parameter("Trend Mode", DefaultValue = TrendMode.Slope, Group = "Trend")]
+        public TrendMode TrendDetectionMode { get; set; }
         
-        [Parameter("Hurst Period", DefaultValue = 100, MinValue = 30, Group = "Trend")]
-        public int HurstPeriod { get; set; }
+        [Parameter("Fast Smooth Length", DefaultValue = 10, MinValue = 5, MaxValue = 50, Group = "Trend")]
+        public int FastSmoothLength { get; set; }
         
-        [Parameter("Hurst Threshold", DefaultValue = 0.55, MinValue = 0.5, MaxValue = 0.7, Group = "Trend")]
-        public double HurstThreshold { get; set; }
+        [Parameter("Slow Smooth Length", DefaultValue = 20, MinValue = 10, MaxValue = 100, Group = "Trend")]
+        public int SlowSmoothLength { get; set; }
         
         // ──────────────────────────────────────────────────────────────────────
-        // گروه 2: تنظیمات Fractal Dimension (تشخیص Correction)
+        // گروه 2: تنظیمات Fractal
         // ──────────────────────────────────────────────────────────────────────
         
-        [Parameter("Window Size", DefaultValue = 50, MinValue = 30, Group = "FD")]
+        [Parameter("Fractal Period (N)", DefaultValue = 2, MinValue = 1, MaxValue = 5, Group = "Fractal")]
+        public int FractalPeriod { get; set; }
+        
+        [Parameter("Window Size", DefaultValue = 50, MinValue = 30, Group = "Fractal")]
         public int WindowSize { get; set; }
         
-        [Parameter("Max K", DefaultValue = 8, MinValue = 2, MaxValue = 20, Group = "FD")]
+        [Parameter("Max K", DefaultValue = 8, MinValue = 2, MaxValue = 20, Group = "Fractal")]
         public int MaxK { get; set; }
         
-        [Parameter("FD Chaos Start", DefaultValue = 1.65, MinValue = 1.0, MaxValue = 2.0, Group = "FD")]
-        public double FDChaosThreshold { get; set; }
+        [Parameter("Chaos Threshold", DefaultValue = 1.65, MinValue = 1.0, MaxValue = 2.0, Group = "Fractal")]
+        public double ChaosThreshold { get; set; }
         
-        [Parameter("FD Stable Exit", DefaultValue = 1.45, MinValue = 1.0, MaxValue = 2.0, Group = "FD")]
-        public double FDStableThreshold { get; set; }
-        
-        [Parameter("P_zero Lookback", DefaultValue = 20, MinValue = 10, MaxValue = 500, Group = "FD")]
+        [Parameter("P-Zero Lookback", DefaultValue = 20, MinValue = 10, MaxValue = 100, Group = "Fractal")]
         public int PZeroLookback { get; set; }
         
         // ──────────────────────────────────────────────────────────────────────
-        // گروه 3: تنظیمات TIP (سیگنال ورود)
+        // گروه 3: تنظیمات TIP (Trigger)
         // ──────────────────────────────────────────────────────────────────────
+        
+        [Parameter("Enable Trigger (TIP)", DefaultValue = true, Group = "TIP")]
+        public bool EnableTrigger { get; set; }
         
         [Parameter("TIP Z-Score Threshold", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 3.5, Group = "TIP")]
         public double TIPZScoreThreshold { get; set; }
         
-        [Parameter("TIP Lookback", DefaultValue = 5, MinValue = 3, MaxValue = 10, Group = "TIP")]
+        [Parameter("TIP Lookback Bars", DefaultValue = 5, MinValue = 3, MaxValue = 10, Group = "TIP")]
         public int TIPLookbackBars { get; set; }
         
         [Parameter("TIP History Size", DefaultValue = 100, MinValue = 50, MaxValue = 200, Group = "TIP")]
         public int TIPHistorySize { get; set; }
         
         // ──────────────────────────────────────────────────────────────────────
-        // گروه 4: تنظیمات  (سلامت بازار)
+        // گروه 4: تنظیمات Toxicity
         // ──────────────────────────────────────────────────────────────────────
-      [Parameter("Spread History", DefaultValue = 50, MinValue = 30, MaxValue = 100, Group = "Toxicity")]
-public int SpreadHistorySize { get; set; }
-
-[Parameter("Toxicity Threshold", DefaultValue = 2.5, MinValue = 1.5, MaxValue = 5.0, Group = "Toxicity")]
-public double ToxicityThreshold { get; set; }
-
+        
+        [Parameter("Enable Toxicity Guard", DefaultValue = true, Group = "Toxicity")]
+        public bool EnableToxicityGuard { get; set; }
+        
+        [Parameter("Spread History", DefaultValue = 50, MinValue = 30, MaxValue = 100, Group = "Toxicity")]
+        public int SpreadHistorySize { get; set; }
+        
+        [Parameter("Toxicity Threshold", DefaultValue = 2.5, MinValue = 1.5, MaxValue = 5.0, Group = "Toxicity")]
+        public double ToxicityThreshold { get; set; }
+        
         // ──────────────────────────────────────────────────────────────────────
         // گروه 5: مدیریت ریسک
         // ──────────────────────────────────────────────────────────────────────
@@ -153,49 +170,63 @@ public double ToxicityThreshold { get; set; }
         [Parameter("Show Stats", DefaultValue = true, Group = "Display")]
         public bool ShowPerformanceStats { get; set; }
         
+        [Parameter("Show Dashboard", DefaultValue = true, Group = "Display")]
+        public bool ShowDashboard { get; set; }
+        
         // ════════════════════════════════════════════════════════════════════════
-        // متغیرهای داخلی - سری‌های داده
+        // متغیرهای داخلی
         // ════════════════════════════════════════════════════════════════════════
         
         // سری‌های اندیکاتور
-        private IndicatorDataSeries _smoothed;         // قیمت Smooth شده
-        private IndicatorDataSeries _trendState;       // وضعیت Trend: +1/-1/0
-        private IndicatorDataSeries _slope;            // شیب خط Smooth
-        private IndicatorDataSeries _hurst;            // Hurst Exponent
-        private IndicatorDataSeries _fractalDimension; // Fractal Dimension
+        private IndicatorDataSeries _fastSmooth;
+        private IndicatorDataSeries _slowSmooth;
+        private IndicatorDataSeries _trendState;
+        private IndicatorDataSeries _fractalDimension;
         
         // ضرایب SuperSmoother
-        private double _c1, _c2, _c3;
+        private double _c1Fast, _c2Fast, _c3Fast;
+        private double _c1Slow, _c2Slow, _c3Slow;
         
-        // بافر برای محاسبات
+        // بافرهای محاسباتی
         private double[] _priceBuffer;
+        private Queue<double> _fdBuffer;
+        private int _fdBufferSize;
         
-        // متغیرهای P_zero
-        private double _pZero;           // نقطه بازگشت
-        private bool _inCorrection;      // آیا در Correction هستیم؟
-        private double _lastHigh;        // بالاترین قیمت اخیر
-        private double _lastLow;         // پایین‌ترین قیمت اخیر
-        private bool _pZeroValid;        // آیا P_zero معتبر است؟
+        // متغیرهای P-Zero دوگانه
+        private double _pZeroBuy;
+        private double _pZeroSell;
+        
+        // متغیرهای شکارچی قله فرکتالی
+        private bool _chaosActive;
+        private double _chaosStartPrice;
+        private int _chaosStartBar;
+        private bool _fractalPeakDetected;
+        private double _peakFD;
+        private double _peakPrice;
+        private int _peakBar;
+        
+        // سیگنال در انتظار
+        private TradeType? _pendingSignal;
+        private bool _tradeTaken;
         
         // متغیرهای TIP
-        private int _buyTicks;           // تعداد tick های خرید
-        private int _sellTicks;          // تعداد tick های فروش
-        private double _lastAsk;         // آخرین Ask
-        private double _currentTIP;      // TIP خام
-        private Queue<double> _tipHistory; // تاریخچه برای Normalize
-        private double _normalizedTIP;   // TIP نرمال شده (Z-Score)
+        private int _buyTicks;
+        private int _sellTicks;
+        private double _lastAsk;
+        private double _currentTIP;
+        private Queue<double> _tipHistory;
+        private double _normalizedTIP;
         
-        // متغیرهای 
-                // متغیرهای Toxicity (سیستم غلتکی جدید)
-        private List<double> _minuteSpreads;       // سطل جمع‌آوری دقیقه‌ای (Collector)
-        private Queue<double> _rollingBaseline;    // حافظه ۳ ساعته (Memory)
-        private double _baselineSpread;            // عدد طلایی (میانه ۳ ساعت)
-        private double _toxicityScore;             // امتیاز فعلی
-        private bool _marketSafe;                  // وضعیت امنیت
-        private int _lastProcessedMinute;          // برای تشخیص تغییر دقیقه
-        private bool _isWarmedUp;                  // آیا ۳ ساعت گرم‌کن تمام شده؟
-        private const int WARMUP_MINUTES = 180;    // مدت زمان گرم‌کن (۳ ساعت)
-
+        // متغیرهای Toxicity
+        private List<double> _minuteSpreads;
+        private Queue<double> _rollingBaseline;
+        private double _baselineSpread;
+        private double _toxicityScore;
+        private bool _marketSafe;
+        private int _lastProcessedMinute;
+        private bool _isWarmedUp;
+        private const int WARMUP_MINUTES = 180;
+        
         // مدیریت معاملات
         private Dictionary<int, TradeContext> _activeTrades;
         private readonly object _tradesLock = new object();
@@ -203,25 +234,31 @@ public double ToxicityThreshold { get; set; }
         // اندیکاتور ATR
         private AverageTrueRange _atr;
         
-        // سیستم لاگ
+        // سیستم‌های کمکی
         private Logger _logger;
         private PerformanceMonitor _perfMonitor;
         
-        // ════════════════════════════════════════════════════════════════════════
-        // ENUM: سطوح لاگ
-        // ════════════════════════════════════════════════════════════════════════
-        public enum LogLevel
-        {
-            DEBUG = 0,    // تمام جزئیات
-            INFO = 1,     // اطلاعات مهم
-            WARNING = 2,  // هشدارها
-            ERROR = 3,    // فقط خطاها
-            NONE = 4      // هیچ چیز
-        }
+        // Dashboard
+        private Border _mainBorder;
+        private StackPanel _contentPanel;
+        private TextBlock _valGuard;
+        private TextBlock _valTrend;
+        private TextBlock _valState;
+        private TextBlock _valZeroBuy;
+        private TextBlock _valZeroSell;
+        private TextBlock _valTrigger;
+        private TextBlock _valTrades;
+        
+        private readonly Color _colTitle = Color.Gold;
+        private readonly Color _colPositive = Color.Lime;
+        private readonly Color _colNegative = Color.Red;
+        private readonly Color _colNeutral = Color.WhiteSmoke;
+        private readonly Color _colWarning = Color.Orange;
         
         // ════════════════════════════════════════════════════════════════════════
-        // CLASS: Logger - سیستم لاگ حرفه‌ای
+        // CLASS: Logger
         // ════════════════════════════════════════════════════════════════════════
+        
         private class Logger
         {
             private readonly Robot _robot;
@@ -285,8 +322,9 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CLASS: Performance Monitor - ردیابی عملکرد
+        // CLASS: Performance Monitor
         // ════════════════════════════════════════════════════════════════════════
+        
         private class PerformanceMonitor
         {
             private DateTime _startTime;
@@ -366,8 +404,9 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CLASS: Trade Context - اطلاعات هر معامله
+        // CLASS: Trade Context
         // ════════════════════════════════════════════════════════════════════════
+        
         private class TradeContext
         {
             public int PositionId { get; set; }
@@ -390,92 +429,70 @@ public double ToxicityThreshold { get; set; }
             }
         }
         
-        
-                // ════════════════════════════════════════════════════════════════════════
-        // 🎨 DASHBOARD CONTROLS (Modern API)
+        // ════════════════════════════════════════════════════════════════════════
+        // ON START
         // ════════════════════════════════════════════════════════════════════════
         
-        [Parameter("Show Dashboard", DefaultValue = true, Group = "Display")]
-        public bool ShowDashboard { get; set; }
-
-        // پنل اصلی کانتینر
-       //احتمالا اضافه باشد فعلا کامنت می//کنیم
-       // private Canvas _mainCanvas;
-       
-       
-       
-        private Border _mainBorder;
-        private StackPanel _contentPanel;
-
-        // تکست‌باکس‌های مقادیر (که قراره آپدیت بشن)
-        private TextBlock _valGuard;
-        private TextBlock _valTrend;
-        private TextBlock _valState;
-        private TextBlock _valZero;
-        private TextBlock _valTrigger;
-        private TextBlock _valTrades;
-        
-        // رنگ‌های ثابت
-        private readonly Color _colTitle = Color.Gold;
-        private readonly Color _colPositive = Color.Lime;
-        private readonly Color _colNegative = Color.Red;
-        private readonly Color _colNeutral = Color.WhiteSmoke;
-        private readonly Color _colWarning = Color.Orange;
-
-
-
-
-
-
-
-
-        
-        
-        // ════════════════════════════════════════════════════════════════════════
-        // ON START - مقداردهی اولیه ربات
-        // ════════════════════════════════════════════════════════════════════════
         protected override void OnStart()
         {
             try
             {
-                // راه‌اندازی سیستم لاگ
+                // راه‌اندازی سیستم‌های کمکی
                 _logger = new Logger(this, LoggingLevel);
                 _perfMonitor = new PerformanceMonitor();
                 _perfMonitor.Start();
                 
                 _logger.Info("════════════════════════════════════════");
-                _logger.Info(" HydroDynamic Bot v8.2 - FINAL");
+                _logger.Info(" HydroDynamic Bot v9.0 - REMASTERED");
                 _logger.Info("════════════════════════════════════════");
                 _logger.Info($" Symbol: {SymbolName}");
                 _logger.Info($" Timeframe: {TimeFrame}");
+                _logger.Info($" Trend Mode: {TrendDetectionMode}");
                 _logger.Info($" Trading: {(TradingEnabled ? "ON ✅" : "OFF ⚠️")}");
+                _logger.Info($" Trigger: {(EnableTrigger ? "ON" : "OFF")}");
+                _logger.Info($" Toxicity Guard: {(EnableToxicityGuard ? "ON" : "OFF")}");
                 _logger.Info("════════════════════════════════════════");
                 
                 // ایجاد سری‌های داده
-                _smoothed = CreateDataSeries();
+                _fastSmooth = CreateDataSeries();
+                _slowSmooth = CreateDataSeries();
                 _trendState = CreateDataSeries();
-                _slope = CreateDataSeries();
-                _hurst = CreateDataSeries();
                 _fractalDimension = CreateDataSeries();
                 
-                // محاسبه ضرایب SuperSmoother
-                // فرمول John Ehlers Two-Pole SuperSmoother
-                double arg = 1.414 * Math.PI / SmoothLength;
-                double a1 = Math.Exp(-arg);
-                double b1 = 2.0 * a1 * Math.Cos(arg);
+                // محاسبه ضرایب SuperSmoother (Fast)
+                CalculateSuperSmootherCoefficients(FastSmoothLength, out _c1Fast, out _c2Fast, out _c3Fast);
                 
-                _c2 = b1;
-                _c3 = -a1 * a1;
-                _c1 = (1.0 - _c2 - _c3) / 2.0;
+                // محاسبه ضرایب SuperSmoother (Slow) - فقط برای حالت Cross
+                if (TrendDetectionMode == TrendMode.Cross)
+                {
+                    CalculateSuperSmootherCoefficients(SlowSmoothLength, out _c1Slow, out _c2Slow, out _c3Slow);
+                }
                 
                 // مقداردهی متغیرها
                 _priceBuffer = new double[WindowSize];
-                _pZero = 0;
-                _inCorrection = false;
-                _pZeroValid = false;
-                _lastHigh = 0;
-                _lastLow = double.MaxValue;
                 
+                // FD Buffer با سایز ثابت
+                _fdBufferSize = (FractalPeriod * 2) + 1;
+                _fdBuffer = new Queue<double>(_fdBufferSize);
+                
+                // P-Zero دوگانه
+                _pZeroBuy = 0;
+                _pZeroSell = 0;
+                
+                // شکارچی قله
+                _chaosActive = false;
+                _chaosStartPrice = 0;
+                _chaosStartBar = -1;
+                _fractalPeakDetected = false;
+                _peakFD = 0;
+                _peakPrice = 0;
+                _peakBar = -1;
+                
+                // سیگنال
+                _pendingSignal = null;
+                _tradeTaken = false;
+                
+                // TIP
                 _buyTicks = 0;
                 _sellTicks = 0;
                 _lastAsk = Symbol.Ask;
@@ -483,23 +500,21 @@ public double ToxicityThreshold { get; set; }
                 _normalizedTIP = 0;
                 _tipHistory = new Queue<double>();
                 
-                                // راه‌اندازی سیستم Toxicity جدید
+                // Toxicity
                 _minuteSpreads = new List<double>();
                 _rollingBaseline = new Queue<double>();
                 _baselineSpread = 0;
                 _toxicityScore = 0;
-                _marketSafe = false; // تا گرم نشه امن نیست
+                _marketSafe = false;
                 _lastProcessedMinute = Server.Time.Minute;
                 _isWarmedUp = false;
-
+                
+                // معاملات
                 _activeTrades = new Dictionary<int, TradeContext>();
                 _atr = Indicators.AverageTrueRange(ATRPeriod, MovingAverageType.Simple);
                 
-                // محاسبه داده‌های تاریخی
-                _logger.Info($"⏳ Calculating {Bars.Count} bars...");
-                
-                                // محاسبه داده‌های تاریخی (فقط ۵۰۰ کندل آخر برای جلوگیری از کرش)
-                int lookback = 500;
+                // محاسبه داده‌های تاریخی (محدود به 500 بار)
+                int lookback = Math.Min(500, Bars.Count);
                 int startIndex = Math.Max(0, Bars.Count - lookback);
                 
                 _logger.Info($"⏳ Warming up indicators (Last {lookback} bars)...");
@@ -508,21 +523,21 @@ public double ToxicityThreshold { get; set; }
                 {
                     CalculateTrend(i);
                     CalculateFD(i);
-                    UpdatePZero(i);
+                    UpdateDualPZero(i);
                 }
-
                 
                 _logger.Info($"✅ Ready - {Bars.Count} bars processed");
                 
-                // ثبت event
+                // ثبت events
                 Positions.Closed += OnPositionClosed;
                 
+                // Dashboard
+                if (ShowDashboard)
+                {
+                    InitializeDashboard();
+                }
+                
                 _logger.Info("🚀 Bot started successfully!");
-                          
-                  // ✅ اضافه کردن این خط:
-                  InitializeDashboard();
-        
-
             }
             catch (Exception ex)
             {
@@ -532,13 +547,29 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // ON TICK - پردازش هر تغییر قیمت
+        // Helper: محاسبه ضرایب SuperSmoother
         // ════════════════════════════════════════════════════════════════════════
+        
+        private void CalculateSuperSmootherCoefficients(int length, out double c1, out double c2, out double c3)
+        {
+            double arg = 1.414 * Math.PI / length;
+            double a1 = Math.Exp(-arg);
+            double b1 = 2.0 * a1 * Math.Cos(arg);
+            
+            c2 = b1;
+            c3 = -a1 * a1;
+            c1 = (1.0 - c2 - c3) / 2.0;
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // ON TICK
+        // ════════════════════════════════════════════════════════════════════════
+        
         protected override void OnTick()
         {
             try
             {
-                // شمارش Buy/Sell Ticks برای TIP
+                // شمارش Buy/Sell Ticks
                 double currentAsk = Symbol.Ask;
                 
                 if (currentAsk > _lastAsk)
@@ -554,11 +585,22 @@ public double ToxicityThreshold { get; set; }
                     ManagePositions();
                 }
                 
-                // به‌روزرسانی  Monitor
-                UpdateToxicity();
-                  if (ShowDashboard) 
+                // به‌روزرسانی Toxicity
+                if (EnableToxicityGuard)
                 {
-                    try { UpdateDashboard(); } catch {} 
+                    UpdateToxicity();
+                }
+                
+                // چک کردن سیگنال در انتظار (اگر TIP فعال باشد)
+                if (EnableTrigger && _pendingSignal.HasValue && !_tradeTaken)
+                {
+                    CheckTriggerExecution();
+                }
+                
+                // Dashboard
+                if (ShowDashboard)
+                {
+                    try { UpdateDashboard(); } catch { }
                 }
             }
             catch (Exception ex)
@@ -568,8 +610,9 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // ON BAR - پردازش بستن هر bar
+        // ON BAR
         // ════════════════════════════════════════════════════════════════════════
+        
         protected override void OnBar()
         {
             try
@@ -579,16 +622,23 @@ public double ToxicityThreshold { get; set; }
                 // محاسبه اندیکاتورها
                 CalculateTrend(index);
                 CalculateFD(index);
-                UpdatePZero(index);
+                UpdateDualPZero(index);
                 CalculateTIP();
+                
+                // شکار قله فرکتالی
+                DetectFractalPeak(index);
                 
                 // بررسی شرایط ورود
                 if (TradingEnabled)
                 {
                     CheckEntry(index);
-                    
                 }
-                DrawPZeroMarker();
+                
+                // رسم P-Zero
+                if (ShowDashboard)
+                {
+                    DrawPZeroMarkers();
+                }
             }
             catch (Exception ex)
             {
@@ -597,74 +647,72 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CALCULATE TREND - محاسبه روند بازار
+        // CALCULATE TREND - موتور تشخیص روند (Slope یا Cross)
         // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// محاسبه Trend با SuperSmoother + Hurst Exponent
-        /// 
-        /// مراحل:
-        /// 1. SuperSmoother Filter → حذف نویز
-        /// 2. محاسبه Slope → جهت حرکت
-        /// 3. Hurst Exponent → تأیید Persistence
-        /// 4. تعیین TrendState: +1 (صعودی), -1 (نزولی), 0 (خنثی)
-        /// </summary>
+        
         private void CalculateTrend(int index)
         {
             if (index < 2)
             {
-                _smoothed[index] = Bars.ClosePrices[index];
-                _slope[index] = 0;
-                _hurst[index] = 0.5;
+                _fastSmooth[index] = Bars.ClosePrices[index];
+                _slowSmooth[index] = Bars.ClosePrices[index];
                 _trendState[index] = 0;
                 return;
             }
             
             try
             {
-                // ─────────────────────────────────────────────────────
-                // 1. SuperSmoother Filter
-                // ─────────────────────────────────────────────────────
-                // فرمول بازگشتی:
-                // Filt[i] = c1×(Price[i]+Price[i-1])/2 + c2×Filt[i-1] + c3×Filt[i-2]
+                // محاسبه Fast SuperSmoother
+                double priceAvgFast = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
                 
-                double priceAvg = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
+                _fastSmooth[index] = _c1Fast * priceAvgFast
+                                   + _c2Fast * _fastSmooth[index - 1]
+                                   + _c3Fast * _fastSmooth[index - 2];
                 
-                _smoothed[index] = _c1 * priceAvg
-                                 + _c2 * _smoothed[index - 1]
-                                 + _c3 * _smoothed[index - 2];
-                
-                // ─────────────────────────────────────────────────────
-                // 2. محاسبه Slope (شیب)
-                // ─────────────────────────────────────────────────────
-                _slope[index] = _smoothed[index] - _smoothed[index - 1];
-                
-                // ─────────────────────────────────────────────────────
-                // 3. محاسبه Hurst Exponent (CORRECTED)
-                // ─────────────────────────────────────────────────────
-                _hurst[index] = CalculateHurst(index);
-                
-                // ─────────────────────────────────────────────────────
-                // 4. تعیین وضعیت Trend
-                // ─────────────────────────────────────────────────────
-                // شرط Trend صعودی: Slope > 0 AND Hurst > Threshold
-                if (_slope[index] > 0 && _hurst[index] > HurstThreshold)
+                if (TrendDetectionMode == TrendMode.Slope)
                 {
-                    _trendState[index] = 1;  // صعودی
+                    // حالت Slope: مقایسه مقدار فعلی با قبلی
+                    if (_fastSmooth[index] > _fastSmooth[index - 1])
+                    {
+                        _trendState[index] = 1;  // صعودی
+                    }
+                    else if (_fastSmooth[index] < _fastSmooth[index - 1])
+                    {
+                        _trendState[index] = -1;  // نزولی
+                    }
+                    else
+                    {
+                        _trendState[index] = 0;  // خنثی
+                    }
                 }
-                // شرط Trend نزولی: Slope < 0 AND Hurst > Threshold
-                else if (_slope[index] < 0 && _hurst[index] > HurstThreshold)
+                else // TrendMode.Cross
                 {
-                    _trendState[index] = -1;  // نزولی
-                }
-                else
-                {
-                    _trendState[index] = 0;  // خنثی
+                    // محاسبه Slow SuperSmoother
+                    double priceAvgSlow = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
+                    
+                    _slowSmooth[index] = _c1Slow * priceAvgSlow
+                                       + _c2Slow * _slowSmooth[index - 1]
+                                       + _c3Slow * _slowSmooth[index - 2];
+                    
+                    // مقایسه Fast و Slow
+                    if (_fastSmooth[index] > _slowSmooth[index])
+                    {
+                        _trendState[index] = 1;  // صعودی
+                    }
+                    else if (_fastSmooth[index] < _slowSmooth[index])
+                    {
+                        _trendState[index] = -1;  // نزولی
+                    }
+                    else
+                    {
+                        _trendState[index] = 0;  // خنثی
+                    }
                 }
                 
                 // لاگ (فقط بار آخر)
                 if (index == Bars.Count - 1)
                 {
-                    _logger.Debug($"Trend: State={_trendState[index]:F0}, Hurst={_hurst[index]:F3}, Slope={_slope[index]:F5}");
+                    _logger.Debug($"Trend [{TrendDetectionMode}]: State={_trendState[index]:F0}, Fast={_fastSmooth[index]:F5}, Slow={_slowSmooth[index]:F5}");
                 }
             }
             catch (Exception ex)
@@ -675,204 +723,9 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CALCULATE HURST - محاسبه Hurst Exponent با R/S Analysis
-        // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// محاسبه Hurst Exponent با روش Rescaled Range (R/S) Analysis
-        /// 
-        /// ✅ CORRECTED: Multi-Scale Regression (نه تک scale)
-        /// 
-        /// الگوریتم:
-        /// 1. برای هر time scale (tau = 5, 10, 20, 40):
-        ///    - تقسیم returns به subset های طول tau
-        ///    - محاسبه R/S برای هر subset
-        ///    - میانگین R/S
-        /// 2. Linear regression: log(R/S) = H × log(tau) + constant
-        /// 3. Slope = Hurst Exponent
-        /// 
-        /// تفسیر:
-        /// H < 0.5  → Mean-reverting (برگشت به میانگین)
-        /// H = 0.5  → Random walk (تصادفی)
-        /// H > 0.5  → Trending (روندار)
-        /// H > 0.55 → Strong trend (روند قوی - مناسب معامله)
-        /// 
-        /// منبع: Hurst, H.E. (1951) - Long-term storage capacity
-        /// </summary>
-        private double CalculateHurst(int index)
-        {
-            if (index < HurstPeriod)
-                return 0.5;  // Random walk
-            
-            try
-            {
-                // ─────────────────────────────────────────────────────
-                // 1. استخراج قیمت‌ها
-                // ─────────────────────────────────────────────────────
-                double[] prices = new double[HurstPeriod];
-                for (int i = 0; i < HurstPeriod; i++)
-                {
-                    int idx = index - HurstPeriod + 1 + i;
-                    prices[i] = Bars.ClosePrices[idx];
-                }
-                
-                // ─────────────────────────────────────────────────────
-                // 2. محاسبه Log Returns
-                // ─────────────────────────────────────────────────────
-                // Return[i] = ln(Price[i+1] / Price[i])
-                double[] returns = new double[HurstPeriod - 1];
-                for (int i = 0; i < returns.Length; i++)
-                {
-                    if (prices[i] > 0 && prices[i + 1] > 0)
-                        returns[i] = Math.Log(prices[i + 1] / prices[i]);
-                    else
-                        returns[i] = 0;
-                }
-                
-                // ─────────────────────────────────────────────────────
-                // 3. محاسبه R/S برای Time Scales مختلف
-                // ─────────────────────────────────────────────────────
-                List<double> logTaus = new List<double>();
-                List<double> logRS = new List<double>();
-                
-                // Time scales: 5, 10, 20, 40 bars
-                int[] taus = new int[] { 5, 10, 20, 40 };
-                
-                foreach (int tau in taus)
-                {
-                    if (tau > returns.Length)
-                        continue;
-                    
-                    int numSubsets = returns.Length / tau;
-                    if (numSubsets < 2)
-                        continue;
-                    
-                    double sumRS = 0;
-                    int validSubsets = 0;
-                    
-                    // برای هر subset
-                    for (int subset = 0; subset < numSubsets; subset++)
-                    {
-                        // استخراج subset
-                        double[] subReturns = new double[tau];
-                        for (int i = 0; i < tau; i++)
-                        {
-                            int idx = subset * tau + i;
-                            if (idx < returns.Length)
-                                subReturns[i] = returns[idx];
-                        }
-                        
-                        // میانگین subset
-                        double subMean = subReturns.Average();
-                        
-                        // محاسبه Cumulative Deviations
-                        // Y[k] = Σ(X[i] - Mean)
-                        double cum = 0;
-                        double maxCum = double.MinValue;
-                        double minCum = double.MaxValue;
-                        
-                        foreach (double r in subReturns)
-                        {
-                            cum += r - subMean;
-                            if (cum > maxCum) maxCum = cum;
-                            if (cum < minCum) minCum = cum;
-                        }
-                        
-                        // Range = Max - Min
-                        double range = maxCum - minCum;
-                        
-                        // Standard Deviation
-                        double variance = 0;
-                        foreach (double r in subReturns)
-                        {
-                            variance += (r - subMean) * (r - subMean);
-                        }
-                        double std = Math.Sqrt(variance / tau);
-                        
-                        // R/S
-                        if (std > 1e-10 && range > 0)
-                        {
-                            sumRS += range / std;
-                            validSubsets++;
-                        }
-                    }
-                    
-                    // میانگین R/S برای این tau
-                    if (validSubsets > 0)
-                    {
-                        double avgRS = sumRS / validSubsets;
-                        if (avgRS > 0)
-                        {
-                            logTaus.Add(Math.Log(tau));
-                            logRS.Add(Math.Log(avgRS));
-                        }
-                    }
-                }
-                
-                // ─────────────────────────────────────────────────────
-                // 4. Linear Regression
-                // ─────────────────────────────────────────────────────
-                // log(R/S) = H × log(tau) + const
-                // Slope = Hurst Exponent
-                
-                if (logTaus.Count < 2)
-                    return 0.5;
-                
-                double sumX = logTaus.Sum();
-                double sumY = logRS.Sum();
-                double sumXY = 0;
-                double sumX2 = 0;
-                
-                for (int i = 0; i < logTaus.Count; i++)
-                {
-                    sumXY += logTaus[i] * logRS[i];
-                    sumX2 += logTaus[i] * logTaus[i];
-                }
-                
-                int n = logTaus.Count;
-                double denom = n * sumX2 - sumX * sumX;
-                
-                if (Math.Abs(denom) < 1e-10)
-                    return 0.5;
-                
-                // Slope = Hurst
-                double hurst = (n * sumXY - sumX * sumY) / denom;
-                
-                // محدود به [0.01, 0.99]
-                return Math.Max(0.01, Math.Min(0.99, hurst));
-            }
-            catch (Exception ex)
-            {
-                _logger.Error($"Error in CalculateHurst at {index}", ex);
-                return 0.5;
-            }
-        }
-        
-        // ════════════════════════════════════════════════════════════════════════
         // CALCULATE FD - محاسبه Fractal Dimension با الگوریتم Higuchi
         // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// محاسبه Fractal Dimension با الگوریتم Higuchi
-        /// 
-        /// مفهوم:
-        /// FD نشان‌دهنده complexity/chaos بازار است
-        /// 
-        /// الگوریتم:
-        /// 1. برای هر k (فاصله نمونه‌برداری):
-        ///    - محاسبه طول curve در scale k
-        /// 2. Linear regression: log(L[k]) vs log(1/k)
-        /// 3. Slope = Fractal Dimension
-        /// 
-        /// تفسیر:
-        /// FD ~ 1.0-1.3 → Smooth (صاف)
-        /// FD ~ 1.4-1.6 → Random (تصادفی)
-        /// FD ~ 1.7-2.0 → Chaotic (آشوب)
-        /// 
-        /// استفاده:
-        /// FD > 1.65 → شروع Correction
-        /// FD < 1.45 → Stabilized (آماده ورود)
-        /// 
-        /// منبع: Higuchi, T. (1988)
-        /// </summary>
+        
         private void CalculateFD(int index)
         {
             if (index < WindowSize - 1)
@@ -883,28 +736,22 @@ public double ToxicityThreshold { get; set; }
             
             try
             {
-                // ─────────────────────────────────────────────────────
-                // 1. استخراج قیمت‌ها
-                // ─────────────────────────────────────────────────────
+                // استخراج قیمت‌ها
                 int startIdx = index - WindowSize + 1;
                 for (int i = 0; i < WindowSize; i++)
                 {
                     _priceBuffer[i] = Bars.ClosePrices[startIdx + i];
                 }
                 
-                // ─────────────────────────────────────────────────────
-                // 2. الگوریتم Higuchi
-                // ─────────────────────────────────────────────────────
-                List<double> xValues = new List<double>();  // log(1/k)
-                List<double> yValues = new List<double>();  // log(L[k])
+                // الگوریتم Higuchi
+                List<double> xValues = new List<double>();
+                List<double> yValues = new List<double>();
                 
-                // برای هر k
                 for (int k = 1; k <= MaxK; k++)
                 {
                     double lengthSum = 0.0;
                     int validSubsets = 0;
                     
-                    // برای هر offset m
                     for (int m = 0; m < k; m++)
                     {
                         double Lmk = 0.0;
@@ -913,7 +760,6 @@ public double ToxicityThreshold { get; set; }
                         if (points < 1)
                             continue;
                         
-                        // محاسبه طول curve
                         for (int i = 1; i <= points; i++)
                         {
                             int curr = m + i * k;
@@ -925,13 +771,11 @@ public double ToxicityThreshold { get; set; }
                             Lmk += Math.Abs(_priceBuffer[curr] - _priceBuffer[prev]);
                         }
                         
-                        // Normalization
                         double norm = (WindowSize - 1.0) / (points * k * k);
                         lengthSum += Lmk * norm;
                         validSubsets++;
                     }
                     
-                    // میانگین برای این k
                     if (validSubsets > 0)
                     {
                         double avgLk = lengthSum / validSubsets;
@@ -943,9 +787,7 @@ public double ToxicityThreshold { get; set; }
                     }
                 }
                 
-                // ─────────────────────────────────────────────────────
-                // 3. Linear Regression
-                // ─────────────────────────────────────────────────────
+                // Linear Regression
                 if (xValues.Count < 2)
                 {
                     _fractalDimension[index] = 1.0;
@@ -972,16 +814,13 @@ public double ToxicityThreshold { get; set; }
                     return;
                 }
                 
-                // Slope = FD
                 double fd = (n * sumXY - sumX * sumY) / denom;
-                
-                // محدود به [1.0, 2.0]
                 _fractalDimension[index] = Math.Max(1.0, Math.Min(2.0, fd));
                 
                 // لاگ
                 if (index == Bars.Count - 1)
                 {
-                    _logger.Debug($"FD: {_fractalDimension[index]:F3}, Status: {(_fractalDimension[index] > FDChaosThreshold ? "CHAOS" : "STABLE")}");
+                    _logger.Debug($"FD: {_fractalDimension[index]:F3}");
                 }
             }
             catch (Exception ex)
@@ -992,111 +831,150 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // UPDATE P_ZERO - تشخیص Correction و محاسبه P_zero
+        // UPDATE DUAL P-ZERO - به‌روزرسانی P-Zero دوگانه
         // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// تشخیص فاز Correction و محاسبه P_zero
-        /// 
-        /// ✅ CORRECTED: Window-based tracking (نه Global)
-        /// 
-        /// مفهوم P_zero:
-        /// در یک Trend صعودی:
-        /// 1. قیمت به بالاترین نقطه می‌رسد
-        /// 2. Correction شروع می‌شود (FD بالا می‌رود)
-        /// 3. بعد از آرامش، قیمت به P_zero برمی‌گردد
-        /// 4. P_zero = آن نقطه بالا قبل از Correction
-        /// 
-        /// State Machine:
-        /// Normal → FD↑ → Correction Started (P_zero ثبت)
-        /// In Correction → FD↓ → Stabilized (آماده ورود)
-        /// </summary>
-        private void UpdatePZero(int index)
+        
+        private void UpdateDualPZero(int index)
         {
-            if (index < 1)
+            if (index < 0)
                 return;
             
             try
             {
-                double fd = _fractalDimension[index];
-                int trend = (int)_trendState[index];
+                // پیدا کردن بالاترین High (برای Buy)
+                _pZeroBuy = Bars.HighPrices[index];
                 
-                // ─────────────────────────────────────────────────────
-                // 1. به‌روزرسانی High/Low در Window (CORRECTED)
-                // ─────────────────────────────────────────────────────
-                // قبلاً: Global tracking → نادرست
-                // حالا: فقط در PZeroLookback bars اخیر
-                
-                _lastHigh = Bars.HighPrices[index];
-                _lastLow = Bars.LowPrices[index];
-                
-                int start = Math.Max(0, index - PZeroLookback);
-                for (int i = start; i <= index; i++)
+                int startBuy = Math.Max(0, index - PZeroLookback + 1);
+                for (int i = startBuy; i <= index; i++)
                 {
-                    if (Bars.HighPrices[i] > _lastHigh)
-                        _lastHigh = Bars.HighPrices[i];
-                    if (Bars.LowPrices[i] < _lastLow)
-                        _lastLow = Bars.LowPrices[i];
+                    if (Bars.HighPrices[i] > _pZeroBuy)
+                        _pZeroBuy = Bars.HighPrices[i];
                 }
                 
-                // ─────────────────────────────────────────────────────
-                // 2. تشخیص شروع Correction
-                // ─────────────────────────────────────────────────────
-                if (!_inCorrection && fd >= FDChaosThreshold)
-                {
-                    _inCorrection = true;
-                    
-                    // تعیین P_zero بر اساس Trend
-                    if (trend == 1)
-                        _pZero = _lastHigh;
-                    else if (trend == -1)
-                        _pZero = _lastLow;
-                    else
-                        _pZero = Bars.ClosePrices[index];
-                    
-                    _pZeroValid = false;
-                    
-                    _logger.Info($"🌀 CORRECTION STARTED - FD: {fd:F2}, P_zero: {_pZero:F5}");
-                }
+                // پیدا کردن پایین‌ترین Low (برای Sell)
+                _pZeroSell = Bars.LowPrices[index];
                 
-                // ─────────────────────────────────────────────────────
-                // 3. تشخیص پایان Correction
-                // ─────────────────────────────────────────────────────
-                if (_inCorrection && fd < FDStableThreshold)
+                int startSell = Math.Max(0, index - PZeroLookback + 1);
+                for (int i = startSell; i <= index; i++)
                 {
-                    _inCorrection = false;
-                    _pZeroValid = true;
-                    
-                    _logger.Info($"✅ CORRECTION ENDED - FD: {fd:F2}, P_zero: {_pZero:F5}, READY");
+                    if (Bars.LowPrices[i] < _pZeroSell)
+                        _pZeroSell = Bars.LowPrices[i];
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error($"Error in UpdatePZero at {index}", ex);
+                _logger.Error($"Error in UpdateDualPZero at {index}", ex);
+            }
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // DETECT FRACTAL PEAK - شکارچی قله فرکتالی
+        // ════════════════════════════════════════════════════════════════════════
+        
+        private void DetectFractalPeak(int index)
+        {
+            try
+            {
+                double currentFD = _fractalDimension[index];
+                
+                // ─────────────────────────────────────────────────────
+                // 1. ثبت شروع آشوب
+                // ─────────────────────────────────────────────────────
+                if (!_chaosActive && currentFD >= ChaosThreshold)
+                {
+                    _chaosActive = true;
+                    _chaosStartPrice = Bars.ClosePrices[index];
+                    _chaosStartBar = index;
+                    _tradeTaken = false;  // ریست پرچم معامله
+                    
+                    _logger.Info($"🌀 CHAOS STARTED - Bar: {index}, Price: {_chaosStartPrice:F5}, FD: {currentFD:F3}");
+                }
+                
+                // ─────────────────────────────────────────────────────
+                // 2. اضافه کردن به بافر FD
+                // ─────────────────────────────────────────────────────
+                _fdBuffer.Enqueue(currentFD);
+                
+                if (_fdBuffer.Count > _fdBufferSize)
+                    _fdBuffer.Dequeue();
+                
+                // ─────────────────────────────────────────────────────
+                // 3. چک کردن شرط ویلیامز (Williams Fractal)
+                // ─────────────────────────────────────────────────────
+                if (_fdBuffer.Count == _fdBufferSize)
+                {
+                    var fdArray = _fdBuffer.ToArray();
+                    int middleIndex = FractalPeriod;
+                    double middleValue = fdArray[middleIndex];
+                    
+                    // چک کردن: آیا مقدار وسط از همه بزرگتر است؟
+                    bool isPeak = true;
+                    
+                    // چک کردن سمت چپ
+                    for (int i = 0; i < middleIndex; i++)
+                    {
+                        if (fdArray[i] >= middleValue)
+                        {
+                            isPeak = false;
+                            break;
+                        }
+                    }
+                    
+                    // چک کردن سمت راست
+                    if (isPeak)
+                    {
+                        for (int i = middleIndex + 1; i < _fdBufferSize; i++)
+                        {
+                            if (fdArray[i] >= middleValue)
+                            {
+                                isPeak = false;
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // ─────────────────────────────────────────────────
+                    // 4. قله پیدا شد؟
+                    // ─────────────────────────────────────────────────
+                    if (isPeak && _chaosActive)
+                    {
+                        // محاسبه بار مربوط به قله (FractalPeriod بار قبل)
+                        int peakBarIndex = index - FractalPeriod;
+                        
+                        // چک کردن: آیا این قله بعد از شروع آشوب است؟
+                        if (peakBarIndex >= _chaosStartBar)
+                        {
+                            // چک کردن: آیا مقدار قله بالای خط قرمز است؟
+                            if (middleValue >= ChaosThreshold)
+                            {
+                                _fractalPeakDetected = true;
+                                _peakFD = middleValue;
+                                _peakPrice = Bars.ClosePrices[peakBarIndex];
+                                _peakBar = peakBarIndex;
+                                
+                                // رسم فلش بنفش روی چارت
+                                if (ShowDashboard)
+                                {
+                                    string arrowName = $"FractalPeak_{peakBarIndex}";
+                                    Chart.DrawIcon(arrowName, ChartIconType.Diamond, peakBarIndex, _peakPrice, Color.Purple);
+                                }
+                                
+                                _logger.Info($"🔻 FRACTAL PEAK DETECTED - Bar: {peakBarIndex}, Price: {_peakPrice:F5}, FD: {_peakFD:F3}");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error($"Error in DetectFractalPeak at {index}", ex);
             }
         }
         
         // ════════════════════════════════════════════════════════════════════════
         // CALCULATE TIP - محاسبه Tick Imbalance Pressure
         // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// محاسبه TIP - سیگنال ورود
-        /// 
-        /// ✅ CORRECTED: Normalized با Z-Score (نه Raw value)
-        /// 
-        /// فرمول:
-        /// TIP = (|TIM| × BAA) / PS
-        /// 
-        /// TIM = (BuyTicks - SellTicks) / TotalTicks
-        /// BAA = DominantSideTicks / TotalTicks
-        /// PS = PriceRange / TotalTicks
-        /// 
-        /// مفهوم:
-        /// TIP بالا = حجم زیاد، قیمت کم → Zero-Velocity Momentum
-        /// 
-        /// Normalization:
-        /// Z-Score = (TIP - μ) / σ
-        /// Threshold: 2.0 σ (2 انحراف معیار)
-        /// </summary>
+        
         private void CalculateTIP()
         {
             int total = _buyTicks + _sellTicks;
@@ -1110,14 +988,10 @@ public double ToxicityThreshold { get; set; }
             
             try
             {
-                // ─────────────────────────────────────────────────────
-                // 1. محاسبه TIM (Tick Imbalance)
-                // ─────────────────────────────────────────────────────
+                // محاسبه TIM
                 double TIM = (double)(_buyTicks - _sellTicks) / total;
                 
-                // ─────────────────────────────────────────────────────
-                // 2. محاسبه Price Range
-                // ─────────────────────────────────────────────────────
+                // محاسبه Price Range
                 int idx = Bars.Count - 1;
                 int lookback = Math.Min(TIPLookbackBars, idx);
                 
@@ -1147,26 +1021,18 @@ public double ToxicityThreshold { get; set; }
                 
                 double range = high - low;
                 
-                // ─────────────────────────────────────────────────────
-                // 3. محاسبه PS (Price Sensitivity)
-                // ─────────────────────────────────────────────────────
+                // محاسبه PS
                 double PS = Math.Max(0.000001, range / total);
                 
-                // ─────────────────────────────────────────────────────
-                // 4. محاسبه BAA (Bulk-Acting Aggression)
-                // ─────────────────────────────────────────────────────
+                // محاسبه BAA
                 double BAA = TIM >= 0 ? 
                     (double)_buyTicks / total : 
                     (double)_sellTicks / total;
                 
-                // ─────────────────────────────────────────────────────
-                // 5. محاسبه TIP
-                // ─────────────────────────────────────────────────────
+                // محاسبه TIP
                 _currentTIP = (Math.Abs(TIM) * BAA) / PS;
                 
-                // ─────────────────────────────────────────────────────
-                // 6. Normalization - Z-Score (CORRECTED)
-                // ─────────────────────────────────────────────────────
+                // Normalization - Z-Score
                 _tipHistory.Enqueue(_currentTIP);
                 
                 if (_tipHistory.Count > TIPHistorySize)
@@ -1192,12 +1058,6 @@ public double ToxicityThreshold { get; set; }
                 {
                     _normalizedTIP = 0;
                 }
-                
-                // لاگ سیگنال‌های قوی
-                if (_normalizedTIP > TIPZScoreThreshold)
-                {
-                    _logger.Info($"🔥 TIP SIGNAL - Raw: {_currentTIP:F2}, Z-Score: {_normalizedTIP:F2}");
-                }
             }
             catch (Exception ex)
             {
@@ -1213,23 +1073,24 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // UPDATE TOXICITY - نسخه "قاتل خاموش" (Silent Mode)
+        // UPDATE TOXICITY - سیستم گارد اسپرد
         // ════════════════════════════════════════════════════════════════════════
+        
         private void UpdateToxicity()
         {
             try
             {
-                // 1. محاسبه Spread لحظه‌ای
+                // محاسبه Spread لحظه‌ای
                 double bid = Symbol.Bid;
                 double ask = Symbol.Ask;
                 if (bid <= 0 || ask <= 0) return;
                 
-                double currentSpread = (ask - bid) / Symbol.PipSize; 
+                double currentSpread = (ask - bid) / Symbol.PipSize;
                 
-                // 2. لایه اول: جمع‌آوری دقیقه‌ای
+                // جمع‌آوری دقیقه‌ای
                 _minuteSpreads.Add(currentSpread);
                 
-                // 3. لایه دوم: چک کردن تغییر دقیقه
+                // چک کردن تغییر دقیقه
                 int currentMinute = Server.Time.Minute;
                 if (currentMinute != _lastProcessedMinute)
                 {
@@ -1240,28 +1101,24 @@ public double ToxicityThreshold { get; set; }
                         
                         _rollingBaseline.Enqueue(minuteMedian);
                         
-                        // مدیریت صف و پایان گرم‌کن
                         if (_rollingBaseline.Count > WARMUP_MINUTES)
                         {
                             _rollingBaseline.Dequeue();
                             
-                            // 🔥 تنها جایی که این تابع اجازه داره حرف بزنه (فقط یکبار)
                             if (!_isWarmedUp)
                             {
                                 _isWarmedUp = true;
-                                // محاسبه اولین Baseline رسمی
                                 var tempBase = _rollingBaseline.ToArray();
                                 Array.Sort(tempBase);
                                 _baselineSpread = tempBase[tempBase.Length / 2];
                                 
                                 _logger.Info("════════════════════════════════════════");
-                                _logger.Info($"✅ SYSTEM READY (Warm-up Complete)");
-                                _logger.Info($"📊 Baseline Spread established: {_baselineSpread:F1} pips");
+                                _logger.Info($"✅ TOXICITY GUARD READY");
+                                _logger.Info($"📊 Baseline Spread: {_baselineSpread:F1} pips");
                                 _logger.Info("════════════════════════════════════════");
                             }
                         }
                         
-                        // آپدیت Baseline (بدون سر و صدا)
                         if (_rollingBaseline.Count > 0)
                         {
                             var allBaselines = _rollingBaseline.ToArray();
@@ -1274,7 +1131,7 @@ public double ToxicityThreshold { get; set; }
                     _lastProcessedMinute = currentMinute;
                 }
                 
-                // 4. محاسبه نهایی (کاملاً ساکت)
+                // محاسبه نهایی
                 if (!_isWarmedUp)
                 {
                     _marketSafe = false;
@@ -1285,9 +1142,6 @@ public double ToxicityThreshold { get; set; }
                 double safeBaseline = _baselineSpread > 0 ? _baselineSpread : 1.0;
                 _toxicityScore = currentSpread / safeBaseline;
                 _marketSafe = _toxicityScore < ToxicityThreshold;
-                
-                // ❌ اینجا قبلا لاگ داشتیم، الان حذفش کردم.
-                // اگر بازار سمی باشه، ما چیزی نمیگیم مگر اینکه بخوایم ترید کنیم.
             }
             catch (Exception ex)
             {
@@ -1295,10 +1149,11 @@ public double ToxicityThreshold { get; set; }
                 _marketSafe = false;
             }
         }
-
+        
         // ════════════════════════════════════════════════════════════════════════
-        // CHECK ENTRY - بررسی شرایط ورود
+        // CHECK ENTRY - بررسی شرایط ورود (مقایسه‌گر هوشمند)
         // ════════════════════════════════════════════════════════════════════════
+        
         private void CheckEntry(int index)
         {
             try
@@ -1309,112 +1164,175 @@ public double ToxicityThreshold { get; set; }
                 
                 if (Positions.Any(p => p.Label == MagicNumber.ToString()))
                     return;
-
-                // بررسی وضعیت گرم‌کن (اگر گرم نشده، خارج شو)
-                if (!_isWarmedUp)
-                {
-                    return; 
-                }
-
-                // ─────────────────────────────────────────────────────
-                // 1. Trend معتبر
-                // ─────────────────────────────────────────────────────
+                
+                // آیا معامله قبلاً انجام شده؟
+                if (_tradeTaken)
+                    return;
+                
+                // آیا قله فرکتالی شناسایی شده؟
+                if (!_fractalPeakDetected)
+                    return;
+                
+                // گرفتن روند فعلی
                 int trend = (int)_trendState[index];
-                double hurst = _hurst[index];
                 
-                if (trend == 0 || hurst <= HurstThreshold)
+                if (trend == 0)
                     return;
                 
-                // ─────────────────────────────────────────────────────
-                // 2. P_zero معتبر
-                // ─────────────────────────────────────────────────────
-                if (!_pZeroValid || _pZero == 0)
-                    return;
+                // گرفتن قیمت فعلی
+                double currentPrice = Bars.ClosePrices[index];
                 
                 // ─────────────────────────────────────────────────────
-                // 3. FD Stabilized
+                // مقایسه‌گر: Start Price vs Peak Price
                 // ─────────────────────────────────────────────────────
-                double fd = _fractalDimension[index];
                 
-                if (fd >= FDStableThreshold + 0.05)
-                    return;
+                TradeType? signal = null;
+                string scenario = "";
                 
-                // ─────────────────────────────────────────────────────
-                // 4. موقعیت قیمت
-                // ─────────────────────────────────────────────────────
-                double price = Bars.ClosePrices[index];
-                
-                bool priceOK = trend == 1 ? price < _pZero : price > _pZero;
-                
-                if (!priceOK)
-                    return;
-                
-                // ─────────────────────────────────────────────────────
-                // 5. TIP Signal (CORRECTED - با Z-Score)
-                // ─────────────────────────────────────────────────────
-                if (_normalizedTIP <= TIPZScoreThreshold)
-                    return;
-                
-                // ─────────────────────────────────────────────────────
-                // 6. Market Safe (ADDED)
-                // ─────────────────────────────────────────────────────
-                if (!_marketSafe)
+                if (trend == 1) // روند صعودی
                 {
-                    // ✅ اصلاح شد: _toxicityScore جایگزین _Score شد
-                    _logger.Warning($"⚠️ Skipped - TOXIC market (Score: {_toxicityScore:F2})");
-                    return;
+                    if (_peakPrice < _chaosStartPrice)
+                    {
+                        // قیمت ارزون شده → Correction → BUY
+                        signal = TradeType.Buy;
+                        scenario = "CORRECTION";
+                    }
+                    else if (_peakPrice > _chaosStartPrice)
+                    {
+                        // قیمت گرون شده الکی → Reversal → SELL
+                        signal = TradeType.Sell;
+                        scenario = "REVERSAL (Against Trend)";
+                        
+                        // بستن پوزیشن Buy باز (اگر وجود دارد)
+                        var openBuy = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Buy);
+                        if (openBuy != null)
+                        {
+                            _logger.Warning($"⚠️ REVERSAL DETECTED - Closing BUY position");
+                            ClosePositionSafe(openBuy);
+                        }
+                    }
+                }
+                else if (trend == -1) // روند نزولی
+                {
+                    if (_peakPrice > _chaosStartPrice)
+                    {
+                        // قیمت گرون شده → Correction → SELL
+                        signal = TradeType.Sell;
+                        scenario = "CORRECTION";
+                    }
+                    else if (_peakPrice < _chaosStartPrice)
+                    {
+                        // قیمت ارزون شده الکی → Reversal → BUY
+                        signal = TradeType.Buy;
+                        scenario = "REVERSAL (Against Trend)";
+                        
+                        // بستن پوزیشن Sell باز (اگر وجود دارد)
+                        var openSell = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Sell);
+                        if (openSell != null)
+                        {
+                            _logger.Warning($"⚠️ REVERSAL DETECTED - Closing SELL position");
+                            ClosePositionSafe(openSell);
+                        }
+                    }
                 }
                 
-                // ═════════════════════════════════════════════════════
-                // 🎯 همه شرایط OK - اجرای معامله
-                // ═════════════════════════════════════════════════════
-                _logger.Info("════════════════════════════════════════");
-                _logger.Info("🎯 ALL CONDITIONS MET");
-                _logger.Info($"  Trend: {trend}, Hurst: {hurst:F3}");
-                _logger.Info($"  P_zero: {_pZero:F5}");
-                _logger.Info($"  FD: {fd:F3}");
-                _logger.Info($"  TIP Z-Score: {_normalizedTIP:F2}");
-                _logger.Info($"  Toxicity: {_toxicityScore:F2} ✅"); // ✅ اصلاح شد
-                _logger.Info("════════════════════════════════════════"); // ✅ اصلاح شد (داخل پرانتز لاگر رفت)
+                if (!signal.HasValue)
+                    return;
                 
-                ExecuteTrade(trend);
+                // ─────────────────────────────────────────────────────
+                // چک کردن Toxicity (اگر فعال باشد)
+                // ─────────────────────────────────────────────────────
+                if (EnableToxicityGuard)
+                {
+                    if (!_isWarmedUp || !_marketSafe)
+                    {
+                        _logger.Warning($"⚠️ Signal [{scenario}] BLOCKED - TOXIC market (Score: {_toxicityScore:F2})");
+                        return;
+                    }
+                }
+                
+                // ─────────────────────────────────────────────────────
+                // اجرا یا انتظار برای Trigger
+                // ─────────────────────────────────────────────────────
+                
+                _logger.Info("════════════════════════════════════════");
+                _logger.Info($"🎯 SIGNAL DETECTED: {scenario}");
+                _logger.Info($"  Direction: {signal.Value}");
+                _logger.Info($"  Trend: {trend}");
+                _logger.Info($"  Peak Price: {_peakPrice:F5}");
+                _logger.Info($"  Start Price: {_chaosStartPrice:F5}");
+                _logger.Info($"  Peak FD: {_peakFD:F3}");
+                _logger.Info("════════════════════════════════════════");
+                
+                if (EnableTrigger)
+                {
+                    // ذخیره سیگنال برای چک کردن در OnTick
+                    _pendingSignal = signal.Value;
+                    _logger.Info($"⏳ Waiting for TIP confirmation...");
+                }
+                else
+                {
+                    // اجرای مستقیم
+                    ExecuteTrade(signal.Value, scenario);
+                    _tradeTaken = true;
+                    _fractalPeakDetected = false;  // ریست قله
+                    _pendingSignal = null;
+                }
             }
             catch (Exception ex)
             {
                 _logger.Error("Error in CheckEntry", ex);
             }
         }
-
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // CHECK TRIGGER EXECUTION - چک کردن TIP برای اجرای سیگنال
+        // ════════════════════════════════════════════════════════════════════════
+        
+        private void CheckTriggerExecution()
+        {
+            try
+            {
+                if (!_pendingSignal.HasValue)
+                    return;
+                
+                // چک کردن TIP Z-Score
+                if (_normalizedTIP >= TIPZScoreThreshold)
+                {
+                    _logger.Info($"🔥 TIP CONFIRMED - Z-Score: {_normalizedTIP:F2}");
+                    
+                    ExecuteTrade(_pendingSignal.Value, "TIP Triggered");
+                    _tradeTaken = true;
+                    _fractalPeakDetected = false;  // ریست قله
+                    _pendingSignal = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error("Error in CheckTriggerExecution", ex);
+            }
+        }
         
         // ════════════════════════════════════════════════════════════════════════
         // EXECUTE TRADE - اجرای معامله
         // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// اجرای معامله با:
-        /// 1. محاسبه Stop Loss پویا
-        /// 2. Position Sizing بر اساس ریسک
-        /// 3. محاسبه Targets (TP1, TP2)
-        /// 4. ثبت Trade Context
-        /// </summary>
-        private void ExecuteTrade(int trendState)
+        
+        private void ExecuteTrade(TradeType direction, string scenario)
         {
             try
             {
-                TradeType dir = trendState == 1 ? TradeType.Buy : TradeType.Sell;
-                double price = dir == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
-                double stretch = Math.Abs(price - _pZero);
+                double price = direction == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
+                double pZero = direction == TradeType.Buy ? _pZeroBuy : _pZeroSell;
+                double stretch = Math.Abs(price - pZero);
                 
-                // ─────────────────────────────────────────────────────
-                // 1. محاسبه Stop Loss (Dynamic)
-                // ─────────────────────────────────────────────────────
+                // محاسبه Stop Loss
                 double slDist;
                 
                 if (UseDynamicStopLoss && _atr != null && !double.IsNaN(_atr.Result.LastValue))
                 {
                     int idx = Bars.Count - 1;
                     double S = _fractalDimension[idx] - 1.0;
-                    double H = _hurst[idx];
-                    double M = ((1.0 + S) / (1.0 + H)) * BaseStopMultiplier;
+                    double M = (1.0 + S) * BaseStopMultiplier;
                     
                     double atrStop = Math.Max(M * _atr.Result.LastValue, 0.5 * _atr.Result.LastValue);
                     double stretchStop = stretch + (StopLossBuffer * Symbol.PipSize);
@@ -1426,9 +1344,7 @@ public double ToxicityThreshold { get; set; }
                     slDist = stretch + (StopLossBuffer * Symbol.PipSize);
                 }
                 
-                // ─────────────────────────────────────────────────────
-                // 2. Position Sizing
-                // ─────────────────────────────────────────────────────
+                // Position Sizing
                 double slPips = slDist / Symbol.PipSize;
                 double risk = Account.Balance * (RiskPercent / 100.0);
                 double volume = risk / (slPips * Symbol.PipValue);
@@ -1443,18 +1359,14 @@ public double ToxicityThreshold { get; set; }
                     return;
                 }
                 
-                // ─────────────────────────────────────────────────────
-                // 3. محاسبه Targets
-                // ─────────────────────────────────────────────────────
-                double tp1 = _pZero;
-                double tp2 = dir == TradeType.Buy ? 
-                    _pZero + (stretch * BallisticMultiplier) : 
-                    _pZero - (stretch * BallisticMultiplier);
+                // محاسبه Targets
+                double tp1 = pZero;
+                double tp2 = direction == TradeType.Buy ? 
+                    pZero + (stretch * BallisticMultiplier) : 
+                    pZero - (stretch * BallisticMultiplier);
                 
-                // ─────────────────────────────────────────────────────
-                // 4. اجرای Order
-                // ─────────────────────────────────────────────────────
-                var result = ExecuteMarketOrder(dir, SymbolName, volume, 
+                // اجرای Order
+                var result = ExecuteMarketOrder(direction, SymbolName, volume, 
                     MagicNumber.ToString(), slPips, null);
                 
                 if (result != null && result.IsSuccessful && result.Position != null)
@@ -1466,7 +1378,7 @@ public double ToxicityThreshold { get; set; }
                         {
                             PositionId = result.Position.Id,
                             EntryPrice = price,
-                            PZero = _pZero,
+                            PZero = pZero,
                             Stretch = stretch,
                             TP1 = tp1,
                             TP2 = tp2,
@@ -1474,21 +1386,20 @@ public double ToxicityThreshold { get; set; }
                             TP2Hit = false,
                             TrailingActive = false,
                             EntryBarIndex = Bars.Count - 1,
-                            EntryTrendState = trendState,
-                            Direction = dir,
+                            EntryTrendState = (int)_trendState[Bars.Count - 1],
+                            Direction = direction,
                             EntryTime = Server.Time
                         };
                     }
                     
-                    // Reset P_zero
-                    _pZeroValid = false;
-                    _lastHigh = 0;
-                    _lastLow = double.MaxValue;
+                    // ریست متغیرها
+                    _chaosActive = false;
+                    _fractalPeakDetected = false;
                     
                     _logger.Info("════════════════════════════════════════");
-                    _logger.Info("🚀 TRADE EXECUTED");
+                    _logger.Info($"🚀 TRADE EXECUTED - {scenario}");
                     _logger.Info($"Position: {result.Position.Id}");
-                    _logger.Info($"Direction: {dir}");
+                    _logger.Info($"Direction: {direction}");
                     _logger.Info($"Entry: {price:F5}");
                     _logger.Info($"Volume: {volume / 1000:F2} lots");
                     _logger.Info($"Stop: {slPips:F1} pips");
@@ -1509,16 +1420,9 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // MANAGE POSITIONS - مدیریت معاملات باز (5-Level Exit)
+        // MANAGE POSITIONS - مدیریت معاملات باز
         // ════════════════════════════════════════════════════════════════════════
-        /// <summary>
-        /// مدیریت معاملات با 5 سطح دفاعی:
-        /// 1. Hard Stop Loss
-        /// 2. Target Management (TP1 & TP2)
-        /// 3. Trailing Stop
-        /// 4. Trend Reversal Exit
-        /// 5. Time Stops
-        /// </summary>
+        
         private void ManagePositions()
         {
             try
@@ -1545,9 +1449,7 @@ public double ToxicityThreshold { get; set; }
                     int idx = Bars.Count - 1;
                     int bars = idx - ctx.EntryBarIndex;
                     
-                    // ═════════════════════════════════════════════════
-                    // LEVEL 4: Trend Reversal Exit
-                    // ═════════════════════════════════════════════════
+                    // Trend Reversal Exit
                     if (EnableTrendReversalExit && idx >= 0 && idx < _trendState.Count)
                     {
                         int currTrend = (int)_trendState[idx];
@@ -1563,9 +1465,7 @@ public double ToxicityThreshold { get; set; }
                         }
                     }
                     
-                    // ═════════════════════════════════════════════════
-                    // LEVEL 5: Time Stops
-                    // ═════════════════════════════════════════════════
+                    // Time Stops
                     if (EnableTimeStops)
                     {
                         if (!ctx.TP1Hit && bars > TimeStop1Bars)
@@ -1587,9 +1487,7 @@ public double ToxicityThreshold { get; set; }
                         }
                     }
                     
-                    // ═════════════════════════════════════════════════
-                    // LEVEL 2: TP1
-                    // ═════════════════════════════════════════════════
+                    // TP1
                     if (!ctx.TP1Hit)
                     {
                         bool tp1Hit = pos.TradeType == TradeType.Buy ? 
@@ -1615,9 +1513,7 @@ public double ToxicityThreshold { get; set; }
                         }
                     }
                     
-                    // ═════════════════════════════════════════════════
-                    // LEVEL 2: TP2
-                    // ═════════════════════════════════════════════════
+                    // TP2
                     if (ctx.TP1Hit && !ctx.TP2Hit)
                     {
                         bool tp2Hit = pos.TradeType == TradeType.Buy ? 
@@ -1634,9 +1530,7 @@ public double ToxicityThreshold { get; set; }
                         }
                     }
                     
-                    // ═════════════════════════════════════════════════
-                    // LEVEL 3: Trailing Stop
-                    // ═════════════════════════════════════════════════
+                    // Trailing Stop
                     if (ctx.TrailingActive && _atr != null && !double.IsNaN(_atr.Result.LastValue))
                     {
                         double trailDist = _atr.Result.LastValue * TrailingATRMultiple;
@@ -1677,7 +1571,6 @@ public double ToxicityThreshold { get; set; }
         // ════════════════════════════════════════════════════════════════════════
         
         private TradeResult ClosePositionSafe(Position pos, double? volume = null)
-
         {
             try
             {
@@ -1709,8 +1602,7 @@ public double ToxicityThreshold { get; set; }
                 if (pos == null)
                     return null;
                 
-                return ModifyPosition(pos, sl, tp, ProtectionType.Absolute);
-
+                return ModifyPosition(pos, sl, tp);
             }
             catch (Exception ex)
             {
@@ -1730,7 +1622,6 @@ public double ToxicityThreshold { get; set; }
                 _logger.Info($"ID: {pos.Id}");
                 _logger.Info($"Direction: {pos.TradeType}");
                 _logger.Info($"Entry: {pos.EntryPrice:F5}");
-                
                 _logger.Info($"P&L: ${pos.NetProfit:F2}");
                 _logger.Info($"Pips: {pos.Pips:F1}");
                 _logger.Info($"Reason: {args.Reason}");
@@ -1750,8 +1641,210 @@ public double ToxicityThreshold { get; set; }
         }
         
         // ════════════════════════════════════════════════════════════════════════
+        // DASHBOARD
+        // ════════════════════════════════════════════════════════════════════════
+        
+        private void InitializeDashboard()
+        {
+            if (!ShowDashboard) return;
+            
+            _contentPanel = new StackPanel
+            {
+                Orientation = Orientation.Vertical,
+                Margin = 10,
+                Width = 250
+            };
+            
+            _contentPanel.AddChild(CreateHeader("⚡ HydroDynamic v9.0"));
+            
+            _contentPanel.AddChild(CreateRow("Guard:", out _valGuard));
+            _contentPanel.AddChild(CreateRow("Trend:", out _valTrend));
+            _contentPanel.AddChild(CreateRow("State:", out _valState));
+            _contentPanel.AddChild(CreateRow("P-Zero Buy:", out _valZeroBuy));
+            _contentPanel.AddChild(CreateRow("P-Zero Sell:", out _valZeroSell));
+            _contentPanel.AddChild(CreateRow("Trigger:", out _valTrigger));
+            _contentPanel.AddChild(CreateRow("Last PnL:", out _valTrades));
+            
+            _mainBorder = new Border
+            {
+                BackgroundColor = Color.FromArgb(200, 0, 0, 0),
+                BorderColor = Color.Gold,
+                BorderThickness = 2,
+                CornerRadius = 5,
+                Child = _contentPanel,
+                VerticalAlignment = VerticalAlignment.Top,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Margin = 20
+            };
+            
+            Chart.AddControl(_mainBorder);
+        }
+        
+        private StackPanel CreateRow(string title, out TextBlock valueBlock)
+        {
+            var rowPanel = new StackPanel 
+            { 
+                Orientation = Orientation.Horizontal, 
+                Margin = new Thickness(0, 5, 0, 0) 
+            };
+            
+            var lbl = new TextBlock
+            {
+                Text = title,
+                ForegroundColor = _colTitle,
+                FontWeight = FontWeight.Bold,
+                Width = 100
+            };
+            
+            valueBlock = new TextBlock
+            {
+                Text = "...",
+                ForegroundColor = _colNeutral,
+                HorizontalAlignment = HorizontalAlignment.Right
+            };
+            
+            rowPanel.AddChild(lbl);
+            rowPanel.AddChild(valueBlock);
+            return rowPanel;
+        }
+        
+        private TextBlock CreateHeader(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                ForegroundColor = Color.Cyan,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                FontWeight = FontWeight.ExtraBold,
+                Margin = new Thickness(0, 0, 0, 10),
+                FontSize = 14
+            };
+        }
+        
+        private void UpdateDashboard()
+        {
+            if (!ShowDashboard || _mainBorder == null) return;
+            
+            // Guard (Spread)
+            double currentSpread = (Symbol.Ask - Symbol.Bid) / Symbol.PipSize;
+            _valGuard.Text = $"{currentSpread:F1} / {(_baselineSpread > 0 ? _baselineSpread.ToString("F1") : "-")}";
+            _valGuard.ForegroundColor = _marketSafe ? _colPositive : _colNegative;
+            
+            // Trend
+            int tState = (int)_trendState.Last(0);
+            if (tState == 1) 
+            {
+                _valTrend.Text = "UP ↗";
+                _valTrend.ForegroundColor = _colPositive;
+            }
+            else if (tState == -1)
+            {
+                _valTrend.Text = "DOWN ↘";
+                _valTrend.ForegroundColor = _colNegative;
+            }
+            else
+            {
+                _valTrend.Text = "RANGE ↔";
+                _valTrend.ForegroundColor = _colNeutral;
+            }
+            
+            // State
+            if (_chaosActive)
+            {
+                if (_fractalPeakDetected)
+                {
+                    _valState.Text = "PEAK FOUND ✅";
+                    _valState.ForegroundColor = _colPositive;
+                }
+                else
+                {
+                    _valState.Text = "CHAOS ⚠️";
+                    _valState.ForegroundColor = _colWarning;
+                }
+            }
+            else
+            {
+                _valState.Text = "NORMAL";
+                _valState.ForegroundColor = _colNeutral;
+            }
+            
+            // P-Zero
+            _valZeroBuy.Text = _pZeroBuy > 0 ? _pZeroBuy.ToString("F5") : "---";
+            _valZeroSell.Text = _pZeroSell > 0 ? _pZeroSell.ToString("F5") : "---";
+            
+            // Trigger
+            if (_pendingSignal.HasValue)
+            {
+                _valTrigger.Text = $"WAITING ({_normalizedTIP:F1})";
+                _valTrigger.ForegroundColor = _colWarning;
+            }
+            else if (EnableTrigger && _normalizedTIP > TIPZScoreThreshold)
+            {
+                _valTrigger.Text = $"FIRE! (Z:{_normalizedTIP:F1})";
+                _valTrigger.ForegroundColor = _colPositive;
+            }
+            else if (EnableTrigger)
+            {
+                _valTrigger.Text = $"{(EnableTrigger ? "ON" : "OFF")} ({_normalizedTIP:F1})";
+                _valTrigger.ForegroundColor = Color.Gray;
+            }
+            else
+            {
+                _valTrigger.Text = "OFF (Direct)";
+                _valTrigger.ForegroundColor = _colNeutral;
+            }
+            
+            // Last Trade
+            var lastPos = History.FindLast(MagicNumber.ToString());
+            if (lastPos != null)
+            {
+                _valTrades.Text = $"{lastPos.NetProfit:F2}$";
+                _valTrades.ForegroundColor = lastPos.NetProfit >= 0 ? _colPositive : _colNegative;
+            }
+            else
+            {
+                _valTrades.Text = "No Trades";
+            }
+        }
+        
+        private void DrawPZeroMarkers()
+        {
+            if (!ShowDashboard) return;
+            
+            int index = Bars.Count - 1;
+            
+            // خط P-Zero Buy (سبز)
+            if (_pZeroBuy > 0)
+            {
+                string objBuy = "PZero_Buy";
+                Chart.DrawTrendLine(objBuy, index, _pZeroBuy, index + 5, _pZeroBuy, Color.Lime, 2, LineStyle.Dots);
+                Chart.DrawText(objBuy + "_txt", " Buy", index + 5, _pZeroBuy, Color.Lime);
+            }
+            
+            // خط P-Zero Sell (قرمز)
+            if (_pZeroSell > 0)
+            {
+                string objSell = "PZero_Sell";
+                Chart.DrawTrendLine(objSell, index, _pZeroSell, index + 5, _pZeroSell, Color.Red, 2, LineStyle.Dots);
+                Chart.DrawText(objSell + "_txt", " Sell", index + 5, _pZeroSell, Color.Red);
+            }
+        }
+        
+        private void StopDashboard()
+        {
+            if (_mainBorder != null)
+                Chart.RemoveControl(_mainBorder);
+            
+            Chart.RemoveObject("PZero_Buy");
+            Chart.RemoveObject("PZero_Buy_txt");
+            Chart.RemoveObject("PZero_Sell");
+            Chart.RemoveObject("PZero_Sell_txt");
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
         // ON STOP
         // ════════════════════════════════════════════════════════════════════════
+        
         protected override void OnStop()
         {
             try
@@ -1778,11 +1871,12 @@ public double ToxicityThreshold { get; set; }
                 }
                 
                 _logger.Info($"Market Status:");
-                _logger.Info($"  P_zero: {_pZero:F5}, Valid: {_pZeroValid}");
-                _logger.Info($"  In Correction: {_inCorrection}");
+                _logger.Info($"  P-Zero Buy: {_pZeroBuy:F5}");
+                _logger.Info($"  P-Zero Sell: {_pZeroSell:F5}");
+                _logger.Info($"  Chaos Active: {_chaosActive}");
+                _logger.Info($"  Peak Detected: {_fractalPeakDetected}");
                 _logger.Info($"  Market Safe: {_marketSafe}");
                 _logger.Info($"  Toxicity: {_toxicityScore:F2}");
-
                 
                 _logger.Info(_logger.GetSummary());
                 _logger.Info("════════════════════════════════════════");
@@ -1797,239 +1891,9 @@ public double ToxicityThreshold { get; set; }
                 Print($"❌ Error in OnStop: {ex.Message}");
             }
         }
-    
-    
-        // ════════════════════════════════════════════════════════════════════════
-        // 🛠️ DASHBOARD BUILDER (MODERN UI) - اصلاح شده (Thickness Fixed)
-        // ════════════════════════════════════════════════════════════════════════
-        private void InitializeDashboard()
-        {
-            if (!ShowDashboard) return;
-
-            // 1. ساخت پنل اصلی (Vertical Stack)
-            _contentPanel = new StackPanel
-            {
-                Orientation = Orientation.Vertical,
-                Margin = new Thickness(10), // ✅ اصلاح شد: استفاده از new Thickness
-                Width = 220 
-            };
-
-            // 2. اضافه کردن هدر
-            _contentPanel.AddChild(CreateHeader("⚡ HydroDynamic v8.2"));
-            
-            // 3. اضافه کردن ردیف‌ها
-            _contentPanel.AddChild(CreateRow("Guard:", out _valGuard));
-            _contentPanel.AddChild(CreateRow("Trend:", out _valTrend));
-            _contentPanel.AddChild(CreateRow("State:", out _valState));
-            _contentPanel.AddChild(CreateRow("Zero ($):", out _valZero));
-            _contentPanel.AddChild(CreateRow("Trigger:", out _valTrigger));
-            _contentPanel.AddChild(CreateRow("Last PnL:", out _valTrades));
-
-            // 4. ساخت کادر دور پنل (Border)
-            _mainBorder = new Border
-            {
-                BackgroundColor = Color.FromArgb(200, 0, 0, 0),
-                BorderColor = Color.Gold,
-                BorderThickness = new Thickness(2), // ✅ اصلاح شد: اگر نیاز بود (معمولا دابل می‌گیرد ولی Thickness امن‌تر است)
-                CornerRadius = new CornerRadius(5), // ✅ اصلاح شد: استاندارد cTrader
-                Child = _contentPanel,
-                VerticalAlignment = VerticalAlignment.Top,
-                HorizontalAlignment = HorizontalAlignment.Left,
-                Margin = new Thickness(20) // ✅ اصلاح شد: استفاده از new Thickness
-            };
-
-            // 5. اضافه کردن به چارت
-            Chart.AddControl(_mainBorder);
-        }
-
-        // تابع کمکی برای ساخت هر ردیف (تمیز و مرتب)
-        private StackPanel CreateRow(string title, out TextBlock valueBlock)
-        {
-            // ✅ اصلاح شد: مارجین به صورت استاندارد
-            var rowPanel = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 5, 0, 0) };
-            
-            // عنوان ثابت (طلایی)
-            var lbl = new TextBlock
-            {
-                Text = title,
-                ForegroundColor = _colTitle,
-                FontWeight = FontWeight.Bold,
-                Width = 70 
-            };
-            
-            // مقدار متغیر (سفید پیش‌فرض)
-            valueBlock = new TextBlock
-            {
-                Text = "...",
-                ForegroundColor = _colNeutral,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
-
-            rowPanel.AddChild(lbl);
-            rowPanel.AddChild(valueBlock);
-            return rowPanel;
-        }
-        
-        private TextBlock CreateHeader(string text)
-        {
-            return new TextBlock
-            {
-                Text = text,
-                ForegroundColor = Color.Cyan,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                FontWeight = FontWeight.ExtraBold,
-                Margin = new Thickness(0, 0, 0, 10), // ✅ اصلاح شد: استفاده از new Thickness
-                FontSize = 14
-            };
-        }
-
-
-    
-    
-    
-        // ════════════════════════════════════════════════════════════════════════
-        // 🔄 UPDATE DASHBOARD (LOGIC ENGINE)
-        // ════════════════════════════════════════════════════════════════════════
-        private void UpdateDashboard()
-        {
-            if (!ShowDashboard || _mainBorder == null) return;
-
-            // --- 1. GUARD (Spread) ---
-            // اجرا در هر تیک
-            double currentSpread = (Symbol.Ask - Symbol.Bid) / Symbol.PipSize;
-            _valGuard.Text = $"{currentSpread:F1} / {(_baselineSpread > 0 ? _baselineSpread.ToString("F1") : "-")}";
-            _valGuard.ForegroundColor = _marketSafe ? _colPositive : _colNegative;
-
-            // --- موارد زیر فقط با بسته شدن کندل آپدیت میشن (برای سبکی) ---
-            // اما چون گفتی میخوای لایو ببینی، ما اینجا چک میکنیم اگر تغییر مهمی بود آپدیت بشه
-            
-            // --- 2. TREND ---
-            int tState = (int)_trendState.Last(0);
-            if (tState == 1) 
-            {
-                _valTrend.Text = "BULLISH ↗";
-                _valTrend.ForegroundColor = _colPositive;
-            }
-            else if (tState == -1)
-            {
-                _valTrend.Text = "BEARISH ↘";
-                _valTrend.ForegroundColor = _colNegative;
-            }
-            else
-            {
-                _valTrend.Text = "RANGE ↔";
-                _valTrend.ForegroundColor = _colNeutral;
-            }
-
-            // --- 3. STATE (Correction) ---
-            if (!_isWarmedUp)
-            {
-                _valState.Text = "WARMING UP...";
-                _valState.ForegroundColor = _colWarning;
-            }
-            else if (_inCorrection)
-            {
-                if (!_pZeroValid && _pZero > 0)
-                {
-                    _valState.Text = "DEAD (Invalid)";
-                    _valState.ForegroundColor = _colNegative;
-                }
-                else if (_fractalDimension.Last(0) > 1.8) // High Chaos
-                {
-                    _valState.Text = "CHAOS ⚠️";
-                    _valState.ForegroundColor = _colWarning;
-                }
-                else
-                {
-                    _valState.Text = "CORRECTION ✅";
-                    _valState.ForegroundColor = _colPositive;
-                }
-            }
-            else
-            {
-                 _valState.Text = "TRENDING";
-                 _valState.ForegroundColor = _colNeutral;
-            }
-
-            // --- 4. ZERO ($) ---
-            _valZero.Text = _pZero > 0 ? _pZero.ToString("F5") : "---";
-            // اگر قیمت به زیرو نزدیک شد رنگش عوض شه (آپشنال)
-            
-            // --- 5. TRIGGER (TTL) ---
-            if (!_marketSafe)
-            {
-                _valTrigger.Text = "BLOCKED (Toxic)";
-                _valTrigger.ForegroundColor = _colNegative;
-            }
-            else if (_normalizedTIP > TIPZScoreThreshold)
-            {
-                _valTrigger.Text = $"FIRE! (Z:{_normalizedTIP:F1})";
-                _valTrigger.ForegroundColor = _colPositive;
-            }
-            else if (_normalizedTIP > 1.0)
-            {
-                 _valTrigger.Text = $"Loading... ({_normalizedTIP:F1})";
-                 _valTrigger.ForegroundColor = _colWarning;
-            }
-            else
-            {
-                _valTrigger.Text = $"Waiting ({_normalizedTIP:F1})";
-                _valTrigger.ForegroundColor = Color.Gray;
-            }
-            
-            // --- 6. Last Trade ---
-            // نمایش سود آخرین معامله بسته شده
-             var lastPos = History.FindLast(MagicNumber.ToString());
-             if (lastPos != null)
-             {
-                 _valTrades.Text = $"{lastPos.NetProfit:F2}$";
-                 _valTrades.ForegroundColor = lastPos.NetProfit >= 0 ? _colPositive : _colNegative;
-             }
-             else
-             {
-                 _valTrades.Text = "No Trades";
-             }
-        }
-        // ════════════════════════════════════════════════════════════════════════
-        // 🎯 ON-CHART MARKER
-        // ════════════════════════════════════════════════════════════════════════
-        private void DrawPZeroMarker()
-        {
-            if (!ShowDashboard) return;
-            string objName = "PZero_Level";
-
-            if (!_pZeroValid || _pZero == 0)
-            {
-                Chart.RemoveObject(objName);
-                Chart.RemoveObject(objName + "_txt");
-                return;
-            }
-
-            // رسم خط کوتاه افقی به جای آیکون (دقیق‌تره)
-            // از کندل فعلی تا 5 کندل جلوتر
-            int index = Bars.Count - 1;
-            Chart.DrawTrendLine(objName, index, _pZero, index + 5, _pZero, Color.Gold, 2, LineStyle.Dots);
-            Chart.DrawText(objName + "_txt", " P0", index + 5, _pZero, Color.Gold);
-        }
-        
-        private void StopDashboard()
-        {
-            if (_mainBorder != null)
-                Chart.RemoveControl(_mainBorder);
-                
-            Chart.RemoveObject("PZero_Level");
-            Chart.RemoveObject("PZero_Level_txt");
-        }
-
-
-
-
-    
-    
-     }
- }
+    }
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
-// پایان کد - HydroDynamic Trading Bot v8.2
+// پایان کد - HydroDynamic Trading Bot v9.0 - REMASTERED
 // ══════════════════════════════════════════════════════════════════════════════
- 
