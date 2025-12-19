@@ -65,7 +65,7 @@ namespace cAlgo.Robots
         [Parameter("FD Stable Exit", DefaultValue = 1.45, MinValue = 1.0, MaxValue = 2.0, Group = "FD")]
         public double FDStableThreshold { get; set; }
         
-        [Parameter("P_zero Lookback", DefaultValue = 20, MinValue = 10, MaxValue = 50, Group = "FD")]
+        [Parameter("P_zero Lookback", DefaultValue = 20, MinValue = 10, MaxValue = 500, Group = "FD")]
         public int PZeroLookback { get; set; }
         
         // ──────────────────────────────────────────────────────────────────────
