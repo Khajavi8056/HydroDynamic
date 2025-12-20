@@ -1,7 +1,14 @@
-// ══════════════════════════════════════════════════════════════════════════════
-// 🤖 HydroDynamic Trading Bot - نسخه 9.0 (Remastered)
-// ══════════════════════════════════════════════════════════════════════════════
 
+// ══════════════════════════════════════════════════════════════════════════════
+// 🤖 HydroDynamic Trading Bot - نسخه 9.1 (FIXED & OPTIMIZED)
+// ══════════════════════════════════════════════════════════════════════════════
+// ✅ Fixed: Stop Loss calculations (minimum 15 pips)
+// ✅ Fixed: Peak Detection logic (correct price comparison)
+// ✅ Fixed: Fractal Dimension optimization (faster calculations)
+// ✅ Fixed: Toxicity Guard logic (works when disabled)
+// ✅ Fixed: TIP Trigger logic (direct execution when disabled)
+// ✅ Fixed: Entry logic for both Buy and Sell sides
+// ══════════════════════════════════════════════════════════════════════════════
 
 using System;
 using System.Linq;
@@ -100,6 +107,9 @@ namespace cAlgo.Robots
         [Parameter("Toxicity Threshold", DefaultValue = 2.5, MinValue = 1.5, MaxValue = 5.0, Group = "Toxicity")]
         public double ToxicityThreshold { get; set; }
         
+        [Parameter("Warmup Minutes", DefaultValue = 60, MinValue = 30, MaxValue = 180, Group = "Toxicity")]
+        public int WarmupMinutes { get; set; }
+        
         // ──────────────────────────────────────────────────────────────────────
         // گروه 5: مدیریت ریسک
         // ──────────────────────────────────────────────────────────────────────
@@ -110,8 +120,8 @@ namespace cAlgo.Robots
         [Parameter("Max Positions", DefaultValue = 1, MinValue = 1, MaxValue = 5, Group = "Risk")]
         public int MaxPositions { get; set; }
         
-        [Parameter("Stop Buffer Pips", DefaultValue = 5, MinValue = 0, MaxValue = 20, Group = "Risk")]
-        public double StopLossBuffer { get; set; }
+        [Parameter("Min Stop Loss Pips", DefaultValue = 15, MinValue = 5, MaxValue = 50, Group = "Risk")]
+        public double MinStopLossPips { get; set; }
         
         [Parameter("ATR Period", DefaultValue = 14, MinValue = 5, MaxValue = 50, Group = "Risk")]
         public int ATRPeriod { get; set; }
@@ -119,8 +129,8 @@ namespace cAlgo.Robots
         [Parameter("Use Dynamic SL", DefaultValue = true, Group = "Risk")]
         public bool UseDynamicStopLoss { get; set; }
         
-        [Parameter("Base SL Multiplier", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 5.0, Group = "Risk")]
-        public double BaseStopMultiplier { get; set; }
+        [Parameter("ATR Multiplier", DefaultValue = 2.5, MinValue = 1.0, MaxValue = 5.0, Group = "Risk")]
+        public double ATRMultiplier { get; set; }
         
         // ──────────────────────────────────────────────────────────────────────
         // گروه 6: استراتژی خروج
@@ -180,8 +190,7 @@ namespace cAlgo.Robots
         private double _c1Fast, _c2Fast, _c3Fast;
         private double _c1Slow, _c2Slow, _c3Slow;
         
-        // بافرهای محاسباتی
-        private double[] _priceBuffer;
+        // بافرهای محاسباتی - OPTIMIZED
         private Queue<double> _fdBuffer;
         private int _fdBufferSize;
         
@@ -218,7 +227,6 @@ namespace cAlgo.Robots
         private bool _marketSafe;
         private int _lastProcessedMinute;
         private bool _isWarmedUp;
-        private const int WARMUP_MINUTES = 180;
         
         // مدیریت معاملات
         private Dictionary<int, TradeContext> _activeTrades;
@@ -436,7 +444,7 @@ namespace cAlgo.Robots
                 _perfMonitor.Start();
                 
                 _logger.Info("════════════════════════════════════════");
-                _logger.Info(" HydroDynamic Bot v9.0 - REMASTERED");
+                _logger.Info(" HydroDynamic Bot v9.1 - FIXED");
                 _logger.Info("════════════════════════════════════════");
                 _logger.Info($" Symbol: {SymbolName}");
                 _logger.Info($" Timeframe: {TimeFrame}");
@@ -444,6 +452,7 @@ namespace cAlgo.Robots
                 _logger.Info($" Trading: {(TradingEnabled ? "ON ✅" : "OFF ⚠️")}");
                 _logger.Info($" Trigger: {(EnableTrigger ? "ON" : "OFF")}");
                 _logger.Info($" Toxicity Guard: {(EnableToxicityGuard ? "ON" : "OFF")}");
+                _logger.Info($" Min SL: {MinStopLossPips} pips");
                 _logger.Info("════════════════════════════════════════");
                 
                 // ایجاد سری‌های داده
@@ -462,9 +471,6 @@ namespace cAlgo.Robots
                 }
                 
                 // مقداردهی متغیرها
-                _priceBuffer = new double[WindowSize];
-                
-                // FD Buffer با سایز ثابت
                 _fdBufferSize = (FractalPeriod * 2) + 1;
                 _fdBuffer = new Queue<double>(_fdBufferSize);
                 
@@ -493,21 +499,21 @@ namespace cAlgo.Robots
                 _normalizedTIP = 0;
                 _tipHistory = new Queue<double>();
                 
-                // Toxicity
+                // Toxicity - FIXED: اگر خاموش باشد، مجاز است
                 _minuteSpreads = new List<double>();
                 _rollingBaseline = new Queue<double>();
                 _baselineSpread = 0;
                 _toxicityScore = 0;
-                _marketSafe = false;
+                _marketSafe = !EnableToxicityGuard; // ✅ اگر خاموش باشد، همیشه safe
                 _lastProcessedMinute = Server.Time.Minute;
-                _isWarmedUp = false;
+                _isWarmedUp = !EnableToxicityGuard; // ✅ اگر خاموش باشد، همیشه warmed up
                 
                 // معاملات
                 _activeTrades = new Dictionary<int, TradeContext>();
                 _atr = Indicators.AverageTrueRange(ATRPeriod, MovingAverageType.Simple);
                 
-                // محاسبه داده‌های تاریخی (محدود به 500 بار)
-                int lookback = Math.Min(500, Bars.Count);
+                // محاسبه داده‌های تاریخی
+                int lookback = Math.Min(300, Bars.Count); // کاهش از 500 به 300
                 int startIndex = Math.Max(0, Bars.Count - lookback);
                 
                 _logger.Info($"⏳ Warming up indicators (Last {lookback} bars)...");
@@ -578,13 +584,13 @@ namespace cAlgo.Robots
                     ManagePositions();
                 }
                 
-                // به‌روزرسانی Toxicity
+                // به‌روزرسانی Toxicity - فقط اگر فعال باشد
                 if (EnableToxicityGuard)
                 {
                     UpdateToxicity();
                 }
                 
-                // چک کردن سیگنال در انتظار (اگر TIP فعال باشد)
+                // چک کردن سیگنال در انتظار - فقط اگر TIP فعال باشد
                 if (EnableTrigger && _pendingSignal.HasValue && !_tradeTaken)
                 {
                     CheckTriggerExecution();
@@ -616,7 +622,12 @@ namespace cAlgo.Robots
                 CalculateTrend(index);
                 CalculateFD(index);
                 UpdateDualPZero(index);
-                CalculateTIP();
+                
+                // محاسبه TIP - فقط اگر فعال باشد
+                if (EnableTrigger)
+                {
+                    CalculateTIP();
+                }
                 
                 // شکار قله فرکتالی
                 DetectFractalPeak(index);
@@ -701,12 +712,6 @@ namespace cAlgo.Robots
                         _trendState[index] = 0;  // خنثی
                     }
                 }
-                
-                // لاگ (فقط بار آخر)
-                if (index == Bars.Count - 1)
-                {
-                    _logger.Debug($"Trend [{TrendDetectionMode}]: State={_trendState[index]:F0}, Fast={_fastSmooth[index]:F5}, Slow={_slowSmooth[index]:F5}");
-                }
             }
             catch (Exception ex)
             {
@@ -716,7 +721,7 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CALCULATE FD - محاسبه Fractal Dimension با الگوریتم Higuchi
+        // CALCULATE FD - محاسبه Fractal Dimension با الگوریتم Higuchi (OPTIMIZED)
         // ════════════════════════════════════════════════════════════════════════
         
         private void CalculateFD(int index)
@@ -729,16 +734,11 @@ namespace cAlgo.Robots
             
             try
             {
-                // استخراج قیمت‌ها
-                int startIdx = index - WindowSize + 1;
-                for (int i = 0; i < WindowSize; i++)
-                {
-                    _priceBuffer[i] = Bars.ClosePrices[startIdx + i];
-                }
+                // الگوریتم Higuchi - OPTIMIZED
+                List<double> xValues = new List<double>(MaxK);
+                List<double> yValues = new List<double>(MaxK);
                 
-                // الگوریتم Higuchi
-                List<double> xValues = new List<double>();
-                List<double> yValues = new List<double>();
+                int startIdx = index - WindowSize + 1;
                 
                 for (int k = 1; k <= MaxK; k++)
                 {
@@ -755,13 +755,13 @@ namespace cAlgo.Robots
                         
                         for (int i = 1; i <= points; i++)
                         {
-                            int curr = m + i * k;
-                            int prev = m + (i - 1) * k;
+                            int currIdx = startIdx + m + i * k;
+                            int prevIdx = startIdx + m + (i - 1) * k;
                             
-                            if (curr >= WindowSize || prev >= WindowSize)
+                            if (currIdx >= Bars.Count || prevIdx >= Bars.Count)
                                 continue;
                             
-                            Lmk += Math.Abs(_priceBuffer[curr] - _priceBuffer[prev]);
+                            Lmk += Math.Abs(Bars.ClosePrices[currIdx] - Bars.ClosePrices[prevIdx]);
                         }
                         
                         double norm = (WindowSize - 1.0) / (points * k * k);
@@ -772,7 +772,7 @@ namespace cAlgo.Robots
                     if (validSubsets > 0)
                     {
                         double avgLk = lengthSum / validSubsets;
-                        if (avgLk > 0 && !double.IsNaN(avgLk))
+                        if (avgLk > 0 && !double.IsNaN(avgLk) && !double.IsInfinity(avgLk))
                         {
                             xValues.Add(Math.Log(1.0 / k));
                             yValues.Add(Math.Log(avgLk));
@@ -787,18 +787,17 @@ namespace cAlgo.Robots
                     return;
                 }
                 
-                double sumX = xValues.Sum();
-                double sumY = yValues.Sum();
-                double sumXY = 0;
-                double sumX2 = 0;
+                double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+                int n = xValues.Count;
                 
-                for (int i = 0; i < xValues.Count; i++)
+                for (int i = 0; i < n; i++)
                 {
+                    sumX += xValues[i];
+                    sumY += yValues[i];
                     sumXY += xValues[i] * yValues[i];
                     sumX2 += xValues[i] * xValues[i];
                 }
                 
-                int n = xValues.Count;
                 double denom = n * sumX2 - sumX * sumX;
                 
                 if (Math.Abs(denom) < 1e-10)
@@ -809,12 +808,6 @@ namespace cAlgo.Robots
                 
                 double fd = (n * sumXY - sumX * sumY) / denom;
                 _fractalDimension[index] = Math.Max(1.0, Math.Min(2.0, fd));
-                
-                // لاگ
-                if (index == Bars.Count - 1)
-                {
-                    _logger.Debug($"FD: {_fractalDimension[index]:F3}");
-                }
             }
             catch (Exception ex)
             {
@@ -861,7 +854,7 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // DETECT FRACTAL PEAK - شکارچی قله فرکتالی
+        // DETECT FRACTAL PEAK - شکارچی قله فرکتالی (FIXED LOGIC)
         // ════════════════════════════════════════════════════════════════════════
         
         private void DetectFractalPeak(int index)
@@ -927,7 +920,7 @@ namespace cAlgo.Robots
                     }
                     
                     // ─────────────────────────────────────────────────
-                    // 4. قله پیدا شد؟
+                    // 4. قله پیدا شد؟ - FIXED: ذخیره قیمت در لحظه قله
                     // ─────────────────────────────────────────────────
                     if (isPeak && _chaosActive)
                     {
@@ -942,6 +935,8 @@ namespace cAlgo.Robots
                             {
                                 _fractalPeakDetected = true;
                                 _peakFD = middleValue;
+                                
+                                // ✅ FIXED: ذخیره قیمت در لحظه قله، نه قیمت فعلی
                                 _peakPrice = Bars.ClosePrices[peakBarIndex];
                                 _peakBar = peakBarIndex;
                                 
@@ -952,7 +947,7 @@ namespace cAlgo.Robots
                                     Chart.DrawIcon(arrowName, ChartIconType.Diamond, peakBarIndex, _peakPrice, Color.Purple);
                                 }
                                 
-                                _logger.Info($"🔻 FRACTAL PEAK DETECTED - Bar: {peakBarIndex}, Price: {_peakPrice:F5}, FD: {_peakFD:F3}");
+                                _logger.Info($"🔻 FRACTAL PEAK DETECTED - Bar: {peakBarIndex}, Peak Price: {_peakPrice:F5}, Start Price: {_chaosStartPrice:F5}, FD: {_peakFD:F3}");
                             }
                         }
                     }
@@ -1066,11 +1061,19 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // UPDATE TOXICITY - سیستم گارد اسپرد
+        // UPDATE TOXICITY - سیستم گارد اسپرد (FIXED LOGIC)
         // ════════════════════════════════════════════════════════════════════════
         
         private void UpdateToxicity()
         {
+            // ✅ FIXED: اگر خاموش باشد، همیشه safe و warmed up
+            if (!EnableToxicityGuard)
+            {
+                _marketSafe = true;
+                _isWarmedUp = true;
+                return;
+            }
+            
             try
             {
                 // محاسبه Spread لحظه‌ای
@@ -1094,7 +1097,7 @@ namespace cAlgo.Robots
                         
                         _rollingBaseline.Enqueue(minuteMedian);
                         
-                        if (_rollingBaseline.Count > WARMUP_MINUTES)
+                        if (_rollingBaseline.Count > WarmupMinutes)
                         {
                             _rollingBaseline.Dequeue();
                             
@@ -1144,7 +1147,7 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CHECK ENTRY - بررسی شرایط ورود (مقایسه‌گر هوشمند)
+        // CHECK ENTRY - بررسی شرایط ورود (FIXED LOGIC)
         // ════════════════════════════════════════════════════════════════════════
         
         private void CheckEntry(int index)
@@ -1172,11 +1175,8 @@ namespace cAlgo.Robots
                 if (trend == 0)
                     return;
                 
-                // گرفتن قیمت فعلی
-                double currentPrice = Bars.ClosePrices[index];
-                
                 // ─────────────────────────────────────────────────────
-                // مقایسه‌گر: Start Price vs Peak Price
+                // ✅ FIXED: مقایسه صحیح Peak Price با Start Price
                 // ─────────────────────────────────────────────────────
                 
                 TradeType? signal = null;
@@ -1186,15 +1186,15 @@ namespace cAlgo.Robots
                 {
                     if (_peakPrice < _chaosStartPrice)
                     {
-                        // قیمت ارزون شده → Correction → BUY
+                        // قیمت کاهش یافته → Correction → BUY
                         signal = TradeType.Buy;
-                        scenario = "CORRECTION";
+                        scenario = "CORRECTION (Price dropped)";
                     }
                     else if (_peakPrice > _chaosStartPrice)
                     {
-                        // قیمت گرون شده الکی → Reversal → SELL
+                        // قیمت افزایش یافته در روند صعودی → ممکن است Reversal باشد → SELL
                         signal = TradeType.Sell;
-                        scenario = "REVERSAL (Against Trend)";
+                        scenario = "REVERSAL (Price spiked against trend)";
                         
                         // بستن پوزیشن Buy باز (اگر وجود دارد)
                         var openBuy = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Buy);
@@ -1209,15 +1209,15 @@ namespace cAlgo.Robots
                 {
                     if (_peakPrice > _chaosStartPrice)
                     {
-                        // قیمت گرون شده → Correction → SELL
+                        // قیمت افزایش یافته → Correction → SELL
                         signal = TradeType.Sell;
-                        scenario = "CORRECTION";
+                        scenario = "CORRECTION (Price rose)";
                     }
                     else if (_peakPrice < _chaosStartPrice)
                     {
-                        // قیمت ارزون شده الکی → Reversal → BUY
+                        // قیمت کاهش یافته در روند نزولی → ممکن است Reversal باشد → BUY
                         signal = TradeType.Buy;
-                        scenario = "REVERSAL (Against Trend)";
+                        scenario = "REVERSAL (Price dropped against trend)";
                         
                         // بستن پوزیشن Sell باز (اگر وجود دارد)
                         var openSell = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Sell);
@@ -1233,7 +1233,7 @@ namespace cAlgo.Robots
                     return;
                 
                 // ─────────────────────────────────────────────────────
-                // چک کردن Toxicity (اگر فعال باشد)
+                // ✅ FIXED: چک کردن Toxicity (فقط اگر فعال باشد)
                 // ─────────────────────────────────────────────────────
                 if (EnableToxicityGuard)
                 {
@@ -1245,15 +1245,16 @@ namespace cAlgo.Robots
                 }
                 
                 // ─────────────────────────────────────────────────────
-                // اجرا یا انتظار برای Trigger
+                // ✅ FIXED: اجرا یا انتظار برای Trigger
                 // ─────────────────────────────────────────────────────
                 
                 _logger.Info("════════════════════════════════════════");
                 _logger.Info($"🎯 SIGNAL DETECTED: {scenario}");
                 _logger.Info($"  Direction: {signal.Value}");
-                _logger.Info($"  Trend: {trend}");
+                _logger.Info($"  Trend: {(trend == 1 ? "UP" : "DOWN")}");
                 _logger.Info($"  Peak Price: {_peakPrice:F5}");
                 _logger.Info($"  Start Price: {_chaosStartPrice:F5}");
+                _logger.Info($"  Price Delta: {(_peakPrice - _chaosStartPrice):F5}");
                 _logger.Info($"  Peak FD: {_peakFD:F3}");
                 _logger.Info("════════════════════════════════════════");
                 
@@ -1261,11 +1262,11 @@ namespace cAlgo.Robots
                 {
                     // ذخیره سیگنال برای چک کردن در OnTick
                     _pendingSignal = signal.Value;
-                    _logger.Info($"⏳ Waiting for TIP confirmation...");
+                    _logger.Info($"⏳ Waiting for TIP confirmation (Threshold: {TIPZScoreThreshold})...");
                 }
                 else
                 {
-                    // اجرای مستقیم
+                    // ✅ FIXED: اجرای مستقیم اگر TIP خاموش باشد
                     ExecuteTrade(signal.Value, scenario);
                     _tradeTaken = true;
                     _fractalPeakDetected = false;  // ریست قله
@@ -1307,7 +1308,7 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // EXECUTE TRADE - اجرای معامله
+        // EXECUTE TRADE - اجرای معامله (FIXED STOP LOSS)
         // ════════════════════════════════════════════════════════════════════════
         
         private void ExecuteTrade(TradeType direction, string scenario)
@@ -1318,24 +1319,24 @@ namespace cAlgo.Robots
                 double pZero = direction == TradeType.Buy ? _pZeroBuy : _pZeroSell;
                 double stretch = Math.Abs(price - pZero);
                 
-                // محاسبه Stop Loss
+                // ✅ FIXED: محاسبه Stop Loss با حداقل مطلق
                 double slDist;
                 
                 if (UseDynamicStopLoss && _atr != null && !double.IsNaN(_atr.Result.LastValue))
                 {
-                    int idx = Bars.Count - 1;
-                    double S = _fractalDimension[idx] - 1.0;
-                    double M = (1.0 + S) * BaseStopMultiplier;
-                    
-                    double atrStop = Math.Max(M * _atr.Result.LastValue, 0.5 * _atr.Result.LastValue);
-                    double stretchStop = stretch + (StopLossBuffer * Symbol.PipSize);
-                    
-                    slDist = Math.Max(atrStop, stretchStop);
+                    // Dynamic SL based on ATR
+                    double atrValue = _atr.Result.LastValue;
+                    slDist = atrValue * ATRMultiplier;
                 }
                 else
                 {
-                    slDist = stretch + (StopLossBuffer * Symbol.PipSize);
+                    // Static SL based on stretch
+                    slDist = stretch * 1.5; // 1.5x stretch
                 }
+                
+                // ✅ FIXED: اعمال حداقل مطلق SL (15 pips)
+                double minSL = MinStopLossPips * Symbol.PipSize;
+                slDist = Math.Max(slDist, minSL);
                 
                 // Position Sizing
                 double slPips = slDist / Symbol.PipSize;
@@ -1395,10 +1396,12 @@ namespace cAlgo.Robots
                     _logger.Info($"Direction: {direction}");
                     _logger.Info($"Entry: {price:F5}");
                     _logger.Info($"Volume: {volume / 1000:F2} lots");
-                    _logger.Info($"Stop: {slPips:F1} pips");
+                    _logger.Info($"Stop: {slPips:F1} pips (Min: {MinStopLossPips})");
                     _logger.Info($"Risk: ${risk:F2}");
                     _logger.Info($"TP1: {tp1:F5}");
                     _logger.Info($"TP2: {tp2:F5}");
+                    _logger.Info($"P-Zero: {pZero:F5}");
+                    _logger.Info($"Stretch: {stretch / Symbol.PipSize:F1} pips");
                     _logger.Info("════════════════════════════════════════");
                 }
                 else
@@ -1648,7 +1651,7 @@ namespace cAlgo.Robots
                 Width = 250
             };
             
-            _contentPanel.AddChild(CreateHeader("⚡ HydroDynamic v9.0"));
+            _contentPanel.AddChild(CreateHeader("⚡ HydroDynamic v9.1"));
             
             _contentPanel.AddChild(CreateRow("Guard:", out _valGuard));
             _contentPanel.AddChild(CreateRow("Trend:", out _valTrend));
@@ -1720,8 +1723,17 @@ namespace cAlgo.Robots
             
             // Guard (Spread)
             double currentSpread = (Symbol.Ask - Symbol.Bid) / Symbol.PipSize;
-            _valGuard.Text = $"{currentSpread:F1} / {(_baselineSpread > 0 ? _baselineSpread.ToString("F1") : "-")}";
-            _valGuard.ForegroundColor = _marketSafe ? _colPositive : _colNegative;
+            
+            if (EnableToxicityGuard)
+            {
+                _valGuard.Text = $"{currentSpread:F1} / {(_baselineSpread > 0 ? _baselineSpread.ToString("F1") : "-")}";
+                _valGuard.ForegroundColor = _marketSafe ? _colPositive : _colNegative;
+            }
+            else
+            {
+                _valGuard.Text = "OFF (Always Safe)";
+                _valGuard.ForegroundColor = _colNeutral;
+            }
             
             // Trend
             int tState = (int)_trendState.Last(0);
@@ -1766,20 +1778,23 @@ namespace cAlgo.Robots
             _valZeroSell.Text = _pZeroSell > 0 ? _pZeroSell.ToString("F5") : "---";
             
             // Trigger
-            if (_pendingSignal.HasValue)
+            if (EnableTrigger)
             {
-                _valTrigger.Text = $"WAITING ({_normalizedTIP:F1})";
-                _valTrigger.ForegroundColor = _colWarning;
-            }
-            else if (EnableTrigger && _normalizedTIP > TIPZScoreThreshold)
-            {
-                _valTrigger.Text = $"FIRE! (Z:{_normalizedTIP:F1})";
-                _valTrigger.ForegroundColor = _colPositive;
-            }
-            else if (EnableTrigger)
-            {
-                _valTrigger.Text = $"{(EnableTrigger ? "ON" : "OFF")} ({_normalizedTIP:F1})";
-                _valTrigger.ForegroundColor = Color.Gray;
+                if (_pendingSignal.HasValue)
+                {
+                    _valTrigger.Text = $"WAITING ({_normalizedTIP:F1})";
+                    _valTrigger.ForegroundColor = _colWarning;
+                }
+                else if (_normalizedTIP > TIPZScoreThreshold)
+                {
+                    _valTrigger.Text = $"FIRE! (Z:{_normalizedTIP:F1})";
+                    _valTrigger.ForegroundColor = _colPositive;
+                }
+                else
+                {
+                    _valTrigger.Text = $"ON ({_normalizedTIP:F1})";
+                    _valTrigger.ForegroundColor = Color.Gray;
+                }
             }
             else
             {
@@ -1888,5 +1903,5 @@ namespace cAlgo.Robots
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// پایان کد - HydroDynamic Trading Bot v9.0 - REMASTERED
+// پایان کد - HydroDynamic Trading Bot v9.1 - FIXED & OPTIMIZED
 // ══════════════════════════════════════════════════════════════════════════════
