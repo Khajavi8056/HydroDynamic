@@ -1857,7 +1857,7 @@ namespace cAlgo.Robots
                 if (pos == null)
                     return null;
                 
-                return ModifyPosition(pos, sl, tp);
+                return ModifyPosition(pos, sl, tp, ProtectionType.Absolute);
             }
             catch (Exception ex)
             {
