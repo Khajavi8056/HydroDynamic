@@ -1,7 +1,3 @@
-// ══════════════════════════════════════════════════════════════════════════════
-// 🤖 HydroDynamic Trading Bot - نسخه 10.0 (QUANTUM-KINETIC ARCHITECTURE)
-// ══════════════════════════════════════════════════════════════════════════════
-
 using System;
 using System.Linq;
 using System.Collections.Generic;
@@ -122,6 +118,21 @@ namespace cAlgo.Robots
         [Parameter("ATR Multiplier", DefaultValue = 2.5, MinValue = 1.0, MaxValue = 5.0, Group = "Risk")]
         public double ATRMultiplier { get; set; }
         
+        [Parameter("Smart Exit Enabled", DefaultValue = true, Group = "Exit")]
+        public bool SmartExitEnabled { get; set; }
+
+        [Parameter("Chaos Threshold (FD)", DefaultValue = 1.3, MinValue = 1.0, MaxValue = 2.0, Group = "Exit")]
+        public double ChaosThresholdFD { get; set; }
+
+        [Parameter("TP1 Volume % (Stable)", DefaultValue = 10, MinValue = 0, MaxValue = 100, Group = "Exit")]
+        public double TP1StablePercent { get; set; }
+
+        [Parameter("TP1 Volume % (Chaos)", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
+        public double TP1ChaosPercent { get; set; }
+
+        [Parameter("TP2 Volume % (Stable)", DefaultValue = 40, MinValue = 0, MaxValue = 100, Group = "Exit")]
+        public double TP2StablePercent { get; set; }
+        
         [Parameter("TP1 Close %", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
         public double TP1Percent { get; set; }
         
@@ -130,6 +141,12 @@ namespace cAlgo.Robots
         
         [Parameter("Trailing ATR x", DefaultValue = 1.5, MinValue = 0.5, MaxValue = 3.0, Group = "Exit")]
         public double TrailingATRMultiple { get; set; }
+        
+        [Parameter("Trailing Smoother Length", DefaultValue = 20, MinValue = 5, MaxValue = 50, Group = "Exit")]
+        public int TrailingSmootherLength { get; set; }
+
+        [Parameter("Trailing Offset %", DefaultValue = 0.5, MinValue = 0.1, MaxValue = 2.0, Group = "Exit")]
+        public double TrailingOffsetPercent { get; set; }
         
         [Parameter("Enable Time Stops", DefaultValue = true, Group = "Exit")]
         public bool EnableTimeStops { get; set; }
@@ -166,9 +183,11 @@ namespace cAlgo.Robots
         private IndicatorDataSeries _slowSmooth;
         private IndicatorDataSeries _trendState;
         private IndicatorDataSeries _fractalDimension;
+        private IndicatorDataSeries _trailingSmooth;
         
         private double _c1Fast, _c2Fast, _c3Fast;
         private double _c1Slow, _c2Slow, _c3Slow;
+        private double _c1Trailing, _c2Trailing, _c3Trailing;
         
         private Queue<double> _fdBuffer;
         private int _fdBufferSize;
@@ -399,6 +418,7 @@ namespace cAlgo.Robots
             public int EntryTrendState { get; set; }
             public TradeType Direction { get; set; }
             public DateTime EntryTime { get; set; }
+            public double OriginalVolume { get; set; }
             
             public override string ToString()
             {
@@ -733,6 +753,7 @@ namespace cAlgo.Robots
                 _slowSmooth = CreateDataSeries();
                 _trendState = CreateDataSeries();
                 _fractalDimension = CreateDataSeries();
+                _trailingSmooth = CreateDataSeries();
                 
                 CalculateSuperSmootherCoefficients(FastSmoothLength, out _c1Fast, out _c2Fast, out _c3Fast);
                 
@@ -740,6 +761,8 @@ namespace cAlgo.Robots
                 {
                     CalculateSuperSmootherCoefficients(SlowSmoothLength, out _c1Slow, out _c2Slow, out _c3Slow);
                 }
+                
+                CalculateSuperSmootherCoefficients(TrailingSmootherLength, out _c1Trailing, out _c2Trailing, out _c3Trailing);
                 
                 _fdBufferSize = (FractalPeriod * 2) + 1;
                 _fdBuffer = new Queue<double>(_fdBufferSize);
@@ -953,6 +976,7 @@ namespace cAlgo.Robots
             {
                 _fastSmooth[index] = Bars.ClosePrices[index];
                 _slowSmooth[index] = Bars.ClosePrices[index];
+                _trailingSmooth[index] = Bars.ClosePrices[index];
                 _trendState[index] = 0;
                 return;
             }
@@ -964,6 +988,12 @@ namespace cAlgo.Robots
                 _fastSmooth[index] = _c1Fast * priceAvgFast
                                    + _c2Fast * _fastSmooth[index - 1]
                                    + _c3Fast * _fastSmooth[index - 2];
+                
+                double priceAvgTrailing = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
+                
+                _trailingSmooth[index] = _c1Trailing * priceAvgTrailing
+                                       + _c2Trailing * _trailingSmooth[index - 1]
+                                       + _c3Trailing * _trailingSmooth[index - 2];
                 
                 if (TrendDetectionMode == TrendMode.Slope)
                 {
@@ -1409,6 +1439,22 @@ namespace cAlgo.Robots
             }
         }
         
+        private double NormalizeVolume(double targetVolume)
+        {
+            if (targetVolume <= 0) return 0;
+
+            double step = Symbol.VolumeInUnitsStep;
+            double min = Symbol.VolumeInUnitsMin;
+            double max = Symbol.VolumeInUnitsMax;
+
+            double normalized = Math.Round(targetVolume / step) * step;
+
+            if (normalized < min) return 0;
+            if (normalized > max) return max;
+
+            return normalized;
+        }
+        
         private void ExecuteTrade(TradeType direction, string scenario)
         {
             try
@@ -1417,17 +1463,17 @@ namespace cAlgo.Robots
                 double pZero = direction == TradeType.Buy ? _pZeroBuy : _pZeroSell;
                 double stretch = Math.Abs(price - pZero);
                 
-                double slDist;
-                
-                if (UseDynamicStopLoss && _atr != null && !double.IsNaN(_atr.Result.LastValue))
+                double stopLossPrice;
+                if (direction == TradeType.Buy)
                 {
-                    double atrValue = _atr.Result.LastValue;
-                    slDist = atrValue * ATRMultiplier;
+                    stopLossPrice = _pZeroSell - Symbol.PipSize;
                 }
                 else
                 {
-                    slDist = stretch * 1.5;
+                    stopLossPrice = _pZeroBuy + Symbol.PipSize;
                 }
+                
+                double slDist = Math.Abs(price - stopLossPrice);
                 
                 double minSL = MinStopLossPips * Symbol.PipSize;
                 slDist = Math.Max(slDist, minSL);
@@ -1436,9 +1482,7 @@ namespace cAlgo.Robots
                 double risk = Account.Balance * (RiskPercent / 100.0);
                 double volume = risk / (slPips * Symbol.PipValue);
                 
-                volume = Symbol.NormalizeVolumeInUnits(volume);
-                volume = Math.Max(Symbol.VolumeInUnitsMin, volume);
-                volume = Math.Min(Symbol.VolumeInUnitsMax, volume);
+                volume = NormalizeVolume(volume);
                 
                 if (volume < Symbol.VolumeInUnitsMin)
                 {
@@ -1448,14 +1492,16 @@ namespace cAlgo.Robots
                 
                 double tp1 = pZero;
                 double tp2 = direction == TradeType.Buy ? 
-                    pZero + (stretch * BallisticMultiplier) : 
-                    pZero - (stretch * BallisticMultiplier);
+                    price + (stretch * BallisticMultiplier) : 
+                    price - (stretch * BallisticMultiplier);
                 
                 var result = ExecuteMarketOrder(direction, SymbolName, volume, 
-                    MagicNumber.ToString(), slPips, null);
+                    MagicNumber.ToString(), null, null);
                 
                 if (result != null && result.IsSuccessful && result.Position != null)
                 {
+                    ModifyPositionSafe(result.Position, stopLossPrice, null);
+                    
                     lock (_tradesLock)
                     {
                         _activeTrades[result.Position.Id] = new TradeContext
@@ -1472,7 +1518,8 @@ namespace cAlgo.Robots
                             EntryBarIndex = Bars.Count - 1,
                             EntryTrendState = (int)_trendState[Bars.Count - 1],
                             Direction = direction,
-                            EntryTime = Server.Time
+                            EntryTime = Server.Time,
+                            OriginalVolume = volume
                         };
                     }
                     
@@ -1643,6 +1690,8 @@ namespace cAlgo.Robots
                         }
                     }
                     
+                    double currentFD = _fractalDimension.LastValue;
+                    
                     if (!ctx.TP1Hit)
                     {
                         bool tp1Hit = pos.TradeType == TradeType.Buy ? 
@@ -1650,19 +1699,30 @@ namespace cAlgo.Robots
                         
                         if (tp1Hit)
                         {
-                            double closeVol = pos.VolumeInUnits * (TP1Percent / 100.0);
-                            closeVol = Symbol.NormalizeVolumeInUnits(closeVol);
+                            ModifyPositionSafe(pos, ctx.EntryPrice, null);
+                            ctx.TP1Hit = true;
+                            ctx.TrailingActive = true;
+                            _logger.Info($"✅ TP1 HIT - Pos {pos.Id}. Breakeven set.");
                             
-                            if (closeVol >= Symbol.VolumeInUnitsMin && closeVol <= pos.VolumeInUnits)
+                            if (SmartExitEnabled)
                             {
-                                var res = ClosePositionSafe(pos, closeVol);
+                                double closePercent = currentFD < ChaosThresholdFD ? TP1StablePercent : TP1ChaosPercent;
+                                double rawCloseVol = pos.VolumeInUnits * (closePercent / 100.0);
+                                double closeVol = NormalizeVolume(rawCloseVol);
                                 
-                                if (res != null && res.IsSuccessful)
+                                double remainingVol = pos.VolumeInUnits - closeVol;
+                                if (closeVol >= Symbol.VolumeInUnitsMin && remainingVol >= Symbol.VolumeInUnitsMin)
                                 {
-                                    ctx.TP1Hit = true;
-                                    ctx.TrailingActive = true;
-                                    ModifyPositionSafe(pos, ctx.EntryPrice, ctx.TP2);
-                                    _logger.Info($"✅ TP1 HIT - Pos {pos.Id}");
+                                    var res = ClosePositionSafe(pos, closeVol);
+                                    
+                                    if (res != null && res.IsSuccessful)
+                                    {
+                                        _logger.Info($"Partial close at TP1: {closeVol / 1000:F2} lots ({closePercent}%)");
+                                    }
+                                }
+                                else
+                                {
+                                    _logger.Info($"Skipped partial close at TP1: Invalid volume split.");
                                 }
                             }
                         }
@@ -1675,30 +1735,77 @@ namespace cAlgo.Robots
                         
                         if (tp2Hit)
                         {
-                            _logger.Info($"🎯 TP2 HIT - Pos {pos.Id}");
-                            ClosePositionSafe(pos);
-                            toRemove.Add(ctx.PositionId);
-                            ctx.TP2Hit = true;
-                            _perfMonitor?.RecordTrade(pos.NetProfit);
-                            continue;
+                            if (SmartExitEnabled)
+                            {
+                                if (currentFD >= ChaosThresholdFD)
+                                {
+                                    _logger.Info($"🎯 TP2 HIT (Chaos) - Closing all - Pos {pos.Id}");
+                                    ClosePositionSafe(pos);
+                                    toRemove.Add(ctx.PositionId);
+                                    ctx.TP2Hit = true;
+                                    _perfMonitor?.RecordTrade(pos.NetProfit);
+                                    continue;
+                                }
+                                else
+                                {
+                                    double closePercent = TP2StablePercent;
+                                    double rawCloseVol = ctx.OriginalVolume * (closePercent / 100.0);
+                                    double closeVol = NormalizeVolume(rawCloseVol);
+                                    
+                                    double remainingVol = pos.VolumeInUnits - closeVol;
+                                    if (closeVol >= Symbol.VolumeInUnitsMin && remainingVol >= Symbol.VolumeInUnitsMin)
+                                    {
+                                        var res = ClosePositionSafe(pos, closeVol);
+                                        
+                                        if (res != null && res.IsSuccessful)
+                                        {
+                                            _logger.Info($"Partial close at TP2: {closeVol / 1000:F2} lots ({closePercent}%)");
+                                        }
+                                    }
+                                    else
+                                    {
+                                        _logger.Info($"Skipped partial close at TP2: Invalid volume split.");
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                _logger.Info($"🎯 TP2 HIT - Pos {pos.Id}");
+                                ClosePositionSafe(pos);
+                                toRemove.Add(ctx.PositionId);
+                                ctx.TP2Hit = true;
+                                _perfMonitor?.RecordTrade(pos.NetProfit);
+                                continue;
+                            }
                         }
                     }
                     
-                    if (ctx.TrailingActive && _atr != null && !double.IsNaN(_atr.Result.LastValue))
+                    if (ctx.TrailingActive)
                     {
-                        double trailDist = _atr.Result.LastValue * TrailingATRMultiple;
-                        
-                        if (pos.TradeType == TradeType.Buy)
+                        if (idx >= 2 && !double.IsNaN(_trailingSmooth[idx]))
                         {
-                            double newSL = price - trailDist;
-                            if (pos.StopLoss == null || newSL > pos.StopLoss.Value)
-                                ModifyPositionSafe(pos, newSL, pos.TakeProfit);
-                        }
-                        else
-                        {
-                            double newSL = price + trailDist;
-                            if (pos.StopLoss == null || newSL < pos.StopLoss.Value)
-                                ModifyPositionSafe(pos, newSL, pos.TakeProfit);
+                            double smootherValue = _trailingSmooth[idx];
+                            double distance = Math.Abs(price - smootherValue);
+                            double offset = distance * (TrailingOffsetPercent / 100.0);
+                            
+                            double trailPrice;
+                            if (pos.TradeType == TradeType.Buy)
+                            {
+                                trailPrice = smootherValue - offset;
+                            }
+                            else
+                            {
+                                trailPrice = smootherValue + offset;
+                            }
+                            
+                            bool isCorrectSide = pos.TradeType == TradeType.Buy ? price > smootherValue : price < smootherValue;
+                            bool isRatchet = pos.TradeType == TradeType.Buy ? trailPrice > (pos.StopLoss ?? ctx.EntryPrice) : trailPrice < (pos.StopLoss ?? ctx.EntryPrice);
+                            bool isAboveEntry = pos.TradeType == TradeType.Buy ? trailPrice > ctx.EntryPrice : trailPrice < ctx.EntryPrice;
+                            
+                            if (isCorrectSide && isRatchet && isAboveEntry)
+                            {
+                                ModifyPositionSafe(pos, trailPrice, pos.TakeProfit);
+                            }
                         }
                     }
                 }
@@ -1750,7 +1857,7 @@ namespace cAlgo.Robots
                 if (pos == null)
                     return null;
                 
-                return ModifyPosition(pos, sl, tp, ProtectionType.Absolute);
+                return ModifyPosition(pos, sl, tp);
             }
             catch (Exception ex)
             {
@@ -2063,7 +2170,3 @@ namespace cAlgo.Robots
         }
     }
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// پایان کد - HydroDynamic Trading Bot v10.0 - QUANTUM-KINETIC ARCHITECTURE
-// ══════════════════════════════════════════════════════════════════════════════
