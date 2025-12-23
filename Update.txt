@@ -1,3 +1,15 @@
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 🤖 HydroDynamic Trading Bot - نسخه 9.1 (FIXED & OPTIMIZED)
+// ══════════════════════════════════════════════════════════════════════════════
+// ✅ Fixed: Stop Loss calculations (minimum 15 pips)
+// ✅ Fixed: Peak Detection logic (correct price comparison)
+// ✅ Fixed: Fractal Dimension optimization (faster calculations)
+// ✅ Fixed: Toxicity Guard logic (works when disabled)
+// ✅ Fixed: TIP Trigger logic (direct execution when disabled)
+// ✅ Fixed: Entry logic for both Buy and Sell sides
+// ══════════════════════════════════════════════════════════════════════════════
+
 using System;
 using System.Linq;
 using System.Collections.Generic;
@@ -17,16 +29,8 @@ namespace cAlgo.Robots
         
         public enum TrendMode
         {
-            Slope,
-            Cross
-        }
-        
-        public enum TriggerMode
-        {
-            TTL_Legacy,
-            Kinematic_Jerk,
-            Permutation_Entropy,
-            Hybrid_Jerk_Entropy
+            Slope,    // شیب یک SuperSmoother
+            Cross     // تقاطع دو SuperSmoother
         }
         
         public enum LogLevel
@@ -42,6 +46,10 @@ namespace cAlgo.Robots
         // پارامترهای ورودی
         // ════════════════════════════════════════════════════════════════════════
         
+        // ──────────────────────────────────────────────────────────────────────
+        // گروه 1: تنظیمات Trend
+        // ──────────────────────────────────────────────────────────────────────
+        
         [Parameter("Trend Mode", DefaultValue = TrendMode.Slope, Group = "Trend")]
         public TrendMode TrendDetectionMode { get; set; }
         
@@ -50,6 +58,10 @@ namespace cAlgo.Robots
         
         [Parameter("Slow Smooth Length", DefaultValue = 20, MinValue = 10, MaxValue = 100, Group = "Trend")]
         public int SlowSmoothLength { get; set; }
+        
+        // ──────────────────────────────────────────────────────────────────────
+        // گروه 2: تنظیمات Fractal
+        // ──────────────────────────────────────────────────────────────────────
         
         [Parameter("Fractal Period (N)", DefaultValue = 2, MinValue = 1, MaxValue = 5, Group = "Fractal")]
         public int FractalPeriod { get; set; }
@@ -67,26 +79,24 @@ namespace cAlgo.Robots
         public int PZeroLookback { get; set; }
         
         // ──────────────────────────────────────────────────────────────────────
-        // گروه جدید: Trigger Engine (ماژولار)
+        // گروه 3: تنظیمات TIP (Trigger)
         // ──────────────────────────────────────────────────────────────────────
         
-        [Parameter("Trigger Mode", DefaultValue = TriggerMode.Hybrid_Jerk_Entropy, Group = "Trigger Engine")]
-        public TriggerMode SelectedTrigger { get; set; }
+        [Parameter("Enable Trigger (TIP)", DefaultValue = true, Group = "TIP")]
+        public bool EnableTrigger { get; set; }
         
-        [Parameter("Jerk Threshold", DefaultValue = 2.5, MinValue = 0.5, MaxValue = 5.0, Group = "Trigger Engine")]
-        public double JerkThreshold { get; set; }
+        [Parameter("TIP Z-Score Threshold", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 3.5, Group = "TIP")]
+        public double TIPZScoreThreshold { get; set; }
         
-        [Parameter("Entropy Threshold", DefaultValue = 0.72, MinValue = 0.3, MaxValue = 1.0, Group = "Trigger Engine")]
-        public double EntropyThreshold { get; set; }
+        [Parameter("TIP Lookback Bars", DefaultValue = 5, MinValue = 3, MaxValue = 10, Group = "TIP")]
+        public int TIPLookbackBars { get; set; }
         
-        [Parameter("TTL Z-Score Threshold", DefaultValue = 2.0, MinValue = 1.0, MaxValue = 3.5, Group = "Trigger Engine")]
-        public double TTLZScoreThreshold { get; set; }
+        [Parameter("TIP History Size", DefaultValue = 100, MinValue = 50, MaxValue = 200, Group = "TIP")]
+        public int TIPHistorySize { get; set; }
         
-        [Parameter("TTL Lookback Bars", DefaultValue = 5, MinValue = 3, MaxValue = 10, Group = "Trigger Engine")]
-        public int TTLLookbackBars { get; set; }
-        
-        [Parameter("TTL History Size", DefaultValue = 100, MinValue = 50, MaxValue = 200, Group = "Trigger Engine")]
-        public int TTLHistorySize { get; set; }
+        // ──────────────────────────────────────────────────────────────────────
+        // گروه 4: تنظیمات Toxicity
+        // ──────────────────────────────────────────────────────────────────────
         
         [Parameter("Enable Toxicity Guard", DefaultValue = true, Group = "Toxicity")]
         public bool EnableToxicityGuard { get; set; }
@@ -99,6 +109,10 @@ namespace cAlgo.Robots
         
         [Parameter("Warmup Minutes", DefaultValue = 60, MinValue = 30, MaxValue = 180, Group = "Toxicity")]
         public int WarmupMinutes { get; set; }
+        
+        // ──────────────────────────────────────────────────────────────────────
+        // گروه 5: مدیریت ریسک
+        // ──────────────────────────────────────────────────────────────────────
         
         [Parameter("Risk Percent", DefaultValue = 1.0, MinValue = 0.1, MaxValue = 5.0, Group = "Risk")]
         public double RiskPercent { get; set; }
@@ -118,20 +132,9 @@ namespace cAlgo.Robots
         [Parameter("ATR Multiplier", DefaultValue = 2.5, MinValue = 1.0, MaxValue = 5.0, Group = "Risk")]
         public double ATRMultiplier { get; set; }
         
-        [Parameter("Smart Exit Enabled", DefaultValue = true, Group = "Exit")]
-        public bool SmartExitEnabled { get; set; }
-
-        [Parameter("Chaos Threshold (FD)", DefaultValue = 1.3, MinValue = 1.0, MaxValue = 2.0, Group = "Exit")]
-        public double ChaosThresholdFD { get; set; }
-
-        [Parameter("TP1 Volume % (Stable)", DefaultValue = 10, MinValue = 0, MaxValue = 100, Group = "Exit")]
-        public double TP1StablePercent { get; set; }
-
-        [Parameter("TP1 Volume % (Chaos)", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
-        public double TP1ChaosPercent { get; set; }
-
-        [Parameter("TP2 Volume % (Stable)", DefaultValue = 40, MinValue = 0, MaxValue = 100, Group = "Exit")]
-        public double TP2StablePercent { get; set; }
+        // ──────────────────────────────────────────────────────────────────────
+        // گروه 6: استراتژی خروج
+        // ──────────────────────────────────────────────────────────────────────
         
         [Parameter("TP1 Close %", DefaultValue = 50, MinValue = 0, MaxValue = 100, Group = "Exit")]
         public double TP1Percent { get; set; }
@@ -141,12 +144,6 @@ namespace cAlgo.Robots
         
         [Parameter("Trailing ATR x", DefaultValue = 1.5, MinValue = 0.5, MaxValue = 3.0, Group = "Exit")]
         public double TrailingATRMultiple { get; set; }
-        
-        [Parameter("Trailing Smoother Length", DefaultValue = 20, MinValue = 5, MaxValue = 50, Group = "Exit")]
-        public int TrailingSmootherLength { get; set; }
-
-        [Parameter("Trailing Offset %", DefaultValue = 0.5, MinValue = 0.1, MaxValue = 2.0, Group = "Exit")]
-        public double TrailingOffsetPercent { get; set; }
         
         [Parameter("Enable Time Stops", DefaultValue = true, Group = "Exit")]
         public bool EnableTimeStops { get; set; }
@@ -159,6 +156,10 @@ namespace cAlgo.Robots
         
         [Parameter("Trend Reversal Exit", DefaultValue = true, Group = "Exit")]
         public bool EnableTrendReversalExit { get; set; }
+        
+        // ──────────────────────────────────────────────────────────────────────
+        // گروه 7: کنترل و نمایش
+        // ──────────────────────────────────────────────────────────────────────
         
         [Parameter("Trading Enabled", DefaultValue = false, Group = "Control")]
         public bool TradingEnabled { get; set; }
@@ -179,22 +180,25 @@ namespace cAlgo.Robots
         // متغیرهای داخلی
         // ════════════════════════════════════════════════════════════════════════
         
+        // سری‌های اندیکاتور
         private IndicatorDataSeries _fastSmooth;
         private IndicatorDataSeries _slowSmooth;
         private IndicatorDataSeries _trendState;
         private IndicatorDataSeries _fractalDimension;
-        private IndicatorDataSeries _trailingSmooth;
         
+        // ضرایب SuperSmoother
         private double _c1Fast, _c2Fast, _c3Fast;
         private double _c1Slow, _c2Slow, _c3Slow;
-        private double _c1Trailing, _c2Trailing, _c3Trailing;
         
+        // بافرهای محاسباتی - OPTIMIZED
         private Queue<double> _fdBuffer;
         private int _fdBufferSize;
         
+        // متغیرهای P-Zero دوگانه
         private double _pZeroBuy;
         private double _pZeroSell;
         
+        // متغیرهای شکارچی قله فرکتالی
         private bool _chaosActive;
         private double _chaosStartPrice;
         private int _chaosStartBar;
@@ -203,9 +207,19 @@ namespace cAlgo.Robots
         private double _peakPrice;
         private int _peakBar;
         
+        // سیگنال در انتظار
         private TradeType? _pendingSignal;
         private bool _tradeTaken;
         
+        // متغیرهای TIP
+        private int _buyTicks;
+        private int _sellTicks;
+        private double _lastAsk;
+        private double _currentTIP;
+        private Queue<double> _tipHistory;
+        private double _normalizedTIP;
+        
+        // متغیرهای Toxicity
         private List<double> _minuteSpreads;
         private Queue<double> _rollingBaseline;
         private double _baselineSpread;
@@ -215,22 +229,16 @@ namespace cAlgo.Robots
         private bool _isWarmedUp;
         private List<double> _xValues;
         private List<double> _yValues;
-        
+        // مدیریت معاملات
         private Dictionary<int, TradeContext> _activeTrades;
         private readonly object _tradesLock = new object();
         
+        // اندیکاتور ATR
         private AverageTrueRange _atr;
         
+        // سیستم‌های کمکی
         private Logger _logger;
         private PerformanceMonitor _perfMonitor;
-        
-        // ════════════════════════════════════════════════════════════════════════
-        // Trigger Engines (NEW MODULAR ARCHITECTURE)
-        // ════════════════════════════════════════════════════════════════════════
-        
-        private LegacyTIPEngine _legacyTip;
-        private JerkEngine _jerkEngine;
-        private EntropyEngine _entropyEngine;
         
         // Dashboard
         private Border _mainBorder;
@@ -248,8 +256,6 @@ namespace cAlgo.Robots
         private readonly Color _colNegative = Color.Red;
         private readonly Color _colNeutral = Color.WhiteSmoke;
         private readonly Color _colWarning = Color.Orange;
-        
-        private DateTime _lastDashUpdate;
         
         // ════════════════════════════════════════════════════════════════════════
         // CLASS: Logger
@@ -418,310 +424,10 @@ namespace cAlgo.Robots
             public int EntryTrendState { get; set; }
             public TradeType Direction { get; set; }
             public DateTime EntryTime { get; set; }
-            public double OriginalVolume { get; set; }
             
             public override string ToString()
             {
                 return $"Pos {PositionId}: {Direction} @ {EntryPrice:F5}, P_zero={PZero:F5}";
-            }
-        }
-        
-        // ════════════════════════════════════════════════════════════════════════
-        // TRIGGER ENGINE 1: Legacy TIP (TTL)
-        // ════════════════════════════════════════════════════════════════════════
-        
-        private class LegacyTIPEngine
-        {
-            private readonly Robot _robot;
-            private readonly Symbol _symbol;
-            private readonly double _threshold;
-            private readonly int _lookbackBars;
-            private readonly int _historySize;
-            
-            private int _buyTicks;
-            private int _sellTicks;
-            private double _lastAsk;
-            private double _currentTIP;
-            private Queue<double> _tipHistory;
-            private double _normalizedTIP;
-            
-            public double ZScore => _normalizedTIP;
-            public bool IsTriggered => _normalizedTIP >= _threshold;
-            
-            public LegacyTIPEngine(Robot robot, Symbol symbol, double threshold, int lookbackBars, int historySize)
-            {
-                _robot = robot;
-                _symbol = symbol;
-                _threshold = threshold;
-                _lookbackBars = lookbackBars;
-                _historySize = historySize;
-                
-                _buyTicks = 0;
-                _sellTicks = 0;
-                _lastAsk = symbol.Ask;
-                _currentTIP = 0;
-                _normalizedTIP = 0;
-                _tipHistory = new Queue<double>();
-            }
-            
-            public void OnTick()
-            {
-                double currentAsk = _symbol.Ask;
-                
-                if (currentAsk > _lastAsk)
-                    _buyTicks++;
-                else if (currentAsk < _lastAsk)
-                    _sellTicks++;
-                
-                _lastAsk = currentAsk;
-            }
-            
-            public void OnBar(Bars bars)
-            {
-                int total = _buyTicks + _sellTicks;
-                
-                if (total == 0)
-                {
-                    _currentTIP = 0;
-                    _normalizedTIP = 0;
-                    return;
-                }
-                
-                try
-                {
-                    double TIM = (double)(_buyTicks - _sellTicks) / total;
-                    
-                    int idx = bars.Count - 1;
-                    int lookback = Math.Min(_lookbackBars, idx);
-                    
-                    if (lookback < 1)
-                    {
-                        _currentTIP = 0;
-                        _normalizedTIP = 0;
-                        _buyTicks = 0;
-                        _sellTicks = 0;
-                        return;
-                    }
-                    
-                    double high = bars.HighPrices[idx];
-                    double low = bars.LowPrices[idx];
-                    
-                    for (int i = 1; i <= lookback; i++)
-                    {
-                        int id = idx - i;
-                        if (id >= 0)
-                        {
-                            if (bars.HighPrices[id] > high)
-                                high = bars.HighPrices[id];
-                            if (bars.LowPrices[id] < low)
-                                low = bars.LowPrices[id];
-                        }
-                    }
-                    
-                    double range = high - low;
-                    double PS = Math.Max(0.000001, range / total);
-                    double BAA = TIM >= 0 ? (double)_buyTicks / total : (double)_sellTicks / total;
-                    
-                    _currentTIP = (Math.Abs(TIM) * BAA) / PS;
-                    
-                    _tipHistory.Enqueue(_currentTIP);
-                    
-                    if (_tipHistory.Count > _historySize)
-                        _tipHistory.Dequeue();
-                    
-                    if (_tipHistory.Count >= 30)
-                    {
-                        double[] hist = _tipHistory.ToArray();
-                        double mean = hist.Average();
-                        double variance = hist.Sum(t => (t - mean) * (t - mean)) / hist.Length;
-                        double std = Math.Sqrt(variance);
-                        
-                        if (std > 1e-10)
-                        {
-                            _normalizedTIP = (_currentTIP - mean) / std;
-                        }
-                        else
-                        {
-                            _normalizedTIP = 0;
-                        }
-                    }
-                    else
-                    {
-                        _normalizedTIP = 0;
-                    }
-                }
-                catch
-                {
-                    _currentTIP = 0;
-                    _normalizedTIP = 0;
-                }
-                finally
-                {
-                    _buyTicks = 0;
-                    _sellTicks = 0;
-                }
-            }
-        }
-        
-        // ════════════════════════════════════════════════════════════════════════
-        // TRIGGER ENGINE 2: Kinematic Jerk (Savitzky-Golay 3rd Derivative)
-        // ════════════════════════════════════════════════════════════════════════
-        
-        private class JerkEngine
-        {
-            private readonly double _threshold;
-            private readonly AverageTrueRange _atr;
-            private readonly Queue<double> _priceBuffer;
-            private const int BufferSize = 5;
-            
-            public double Value { get; private set; }
-            public bool IsTriggered => Value >= _threshold;
-            
-            public JerkEngine(double threshold, AverageTrueRange atr)
-            {
-                _threshold = threshold;
-                _atr = atr;
-                _priceBuffer = new Queue<double>(BufferSize);
-                Value = 0;
-            }
-            
-            public void OnBar(double closePrice)
-            {
-                _priceBuffer.Enqueue(closePrice);
-                
-                if (_priceBuffer.Count > BufferSize)
-                    _priceBuffer.Dequeue();
-                
-                if (_priceBuffer.Count < BufferSize)
-                {
-                    Value = 0;
-                    return;
-                }
-                
-                try
-                {
-                    var prices = _priceBuffer.ToArray();
-                    
-                    // Savitzky-Golay coefficients for 3rd derivative (5-point stencil)
-                    // J(t) = [p(t-2) - 2*p(t-1) + 2*p(t+1) - p(t+2)] / 2
-                    // Note: p(t) has weight 0 in this specific formulation
-                    double rawJerk = (prices[0] - 2.0 * prices[1] + 2.0 * prices[3] - prices[4]) / 2.0;
-                    
-                    // Normalize by ATR
-                    if (_atr != null && !double.IsNaN(_atr.Result.LastValue) && _atr.Result.LastValue > 0)
-                    {
-                        Value = Math.Abs(rawJerk) / _atr.Result.LastValue;
-                    }
-                    else
-                    {
-                        Value = 0;
-                    }
-                }
-                catch
-                {
-                    Value = 0;
-                }
-            }
-        }
-        
-        // ════════════════════════════════════════════════════════════════════════
-        // TRIGGER ENGINE 3: Permutation Entropy (Order Pattern Analysis)
-        // ════════════════════════════════════════════════════════════════════════
-        
-        private class EntropyEngine
-        {
-            private readonly double _threshold;
-            private const int Dimension = 5;
-            private const int WindowSize = 50;
-            
-            private readonly Queue<double> _priceBuffer;
-            private readonly Dictionary<string, int> _patternCounts;
-            
-            public double Value { get; private set; }
-            public bool IsSafe => Value < _threshold;
-            
-            public EntropyEngine(double threshold)
-            {
-                _threshold = threshold;
-                _priceBuffer = new Queue<double>(WindowSize);
-                _patternCounts = new Dictionary<string, int>();
-                Value = 1.0; // Start unsafe until warmed up
-            }
-            
-            public void OnBar(double closePrice)
-            {
-                _priceBuffer.Enqueue(closePrice);
-                
-                if (_priceBuffer.Count > WindowSize)
-                    _priceBuffer.Dequeue();
-                
-                if (_priceBuffer.Count < WindowSize)
-                {
-                    Value = 1.0;
-                    return;
-                }
-                
-                try
-                {
-                    _patternCounts.Clear();
-                    var prices = _priceBuffer.ToArray();
-                    
-                    // Generate all patterns in the window
-                    for (int i = 0; i <= prices.Length - Dimension; i++)
-                    {
-                        string pattern = GetOrdinalPattern(prices, i, Dimension);
-                        
-                        if (_patternCounts.ContainsKey(pattern))
-                            _patternCounts[pattern]++;
-                        else
-                            _patternCounts[pattern] = 1;
-                    }
-                    
-                    // Calculate Shannon Entropy
-                    double entropy = 0.0;
-                    int totalPatterns = _patternCounts.Values.Sum();
-                    
-                    foreach (var count in _patternCounts.Values)
-                    {
-                        double p = (double)count / totalPatterns;
-                        if (p > 0)
-                            entropy -= p * Math.Log(p);
-                    }
-                    
-                    // Normalize (max entropy for 5! = 120 permutations is ln(120) ≈ 4.787)
-                    double maxEntropy = Math.Log(Factorial(Dimension));
-                    Value = maxEntropy > 0 ? entropy / maxEntropy : 0;
-                }
-                catch
-                {
-                    Value = 1.0;
-                }
-            }
-            
-            private string GetOrdinalPattern(double[] prices, int startIndex, int dimension)
-            {
-                var segment = new double[dimension];
-                var indices = new int[dimension];
-                
-                for (int i = 0; i < dimension; i++)
-                {
-                    segment[i] = prices[startIndex + i];
-                    indices[i] = i;
-                }
-                
-                // Sort indices by segment values
-                Array.Sort(segment, indices);
-                
-                // Create pattern string
-                return string.Join(",", indices);
-            }
-            
-            private int Factorial(int n)
-            {
-                int result = 1;
-                for (int i = 2; i <= n; i++)
-                    result *= i;
-                return result;
             }
         }
         
@@ -733,43 +439,47 @@ namespace cAlgo.Robots
         {
             try
             {
+                // راه‌اندازی سیستم‌های کمکی
                 _logger = new Logger(this, LoggingLevel);
                 _perfMonitor = new PerformanceMonitor();
                 _perfMonitor.Start();
                 
                 _logger.Info("════════════════════════════════════════");
-                _logger.Info(" HydroDynamic Bot v10.0 - QUANTUM-KINETIC");
+                _logger.Info(" HydroDynamic Bot v9.1 - FIXED");
                 _logger.Info("════════════════════════════════════════");
                 _logger.Info($" Symbol: {SymbolName}");
                 _logger.Info($" Timeframe: {TimeFrame}");
                 _logger.Info($" Trend Mode: {TrendDetectionMode}");
-                _logger.Info($" Trigger Mode: {SelectedTrigger}");
                 _logger.Info($" Trading: {(TradingEnabled ? "ON ✅" : "OFF ⚠️")}");
+                _logger.Info($" Trigger: {(EnableTrigger ? "ON" : "OFF")}");
                 _logger.Info($" Toxicity Guard: {(EnableToxicityGuard ? "ON" : "OFF")}");
                 _logger.Info($" Min SL: {MinStopLossPips} pips");
                 _logger.Info("════════════════════════════════════════");
                 
+                // ایجاد سری‌های داده
                 _fastSmooth = CreateDataSeries();
                 _slowSmooth = CreateDataSeries();
                 _trendState = CreateDataSeries();
                 _fractalDimension = CreateDataSeries();
-                _trailingSmooth = CreateDataSeries();
                 
+                // محاسبه ضرایب SuperSmoother (Fast)
                 CalculateSuperSmootherCoefficients(FastSmoothLength, out _c1Fast, out _c2Fast, out _c3Fast);
                 
+                // محاسبه ضرایب SuperSmoother (Slow) - فقط برای حالت Cross
                 if (TrendDetectionMode == TrendMode.Cross)
                 {
                     CalculateSuperSmootherCoefficients(SlowSmoothLength, out _c1Slow, out _c2Slow, out _c3Slow);
                 }
                 
-                CalculateSuperSmootherCoefficients(TrailingSmootherLength, out _c1Trailing, out _c2Trailing, out _c3Trailing);
-                
+                // مقداردهی متغیرها
                 _fdBufferSize = (FractalPeriod * 2) + 1;
                 _fdBuffer = new Queue<double>(_fdBufferSize);
                 
+                // P-Zero دوگانه
                 _pZeroBuy = 0;
                 _pZeroSell = 0;
                 
+                // شکارچی قله
                 _chaosActive = false;
                 _chaosStartPrice = 0;
                 _chaosStartBar = -1;
@@ -778,49 +488,33 @@ namespace cAlgo.Robots
                 _peakPrice = 0;
                 _peakBar = -1;
                 
+                // سیگنال
                 _pendingSignal = null;
                 _tradeTaken = false;
                 
+                // TIP
+                _buyTicks = 0;
+                _sellTicks = 0;
+                _lastAsk = Symbol.Ask;
+                _currentTIP = 0;
+                _normalizedTIP = 0;
+                _tipHistory = new Queue<double>();
+                
+                // Toxicity - FIXED: اگر خاموش باشد، مجاز است
                 _minuteSpreads = new List<double>();
                 _rollingBaseline = new Queue<double>();
                 _baselineSpread = 0;
                 _toxicityScore = 0;
-                _marketSafe = !EnableToxicityGuard;
+                _marketSafe = !EnableToxicityGuard; // ✅ اگر خاموش باشد، همیشه safe
                 _lastProcessedMinute = Server.Time.Minute;
-                _isWarmedUp = !EnableToxicityGuard;
+                _isWarmedUp = !EnableToxicityGuard; // ✅ اگر خاموش باشد، همیشه warmed up
                 
+                // معاملات
                 _activeTrades = new Dictionary<int, TradeContext>();
                 _atr = Indicators.AverageTrueRange(ATRPeriod, MovingAverageType.Simple);
                 
-                // ════════════════════════════════════════════════════════════════
-                // Initialize Trigger Engines (MODULAR ARCHITECTURE)
-                // ════════════════════════════════════════════════════════════════
-                
-                switch (SelectedTrigger)
-                {
-                    case TriggerMode.TTL_Legacy:
-                        _legacyTip = new LegacyTIPEngine(this, Symbol, TTLZScoreThreshold, TTLLookbackBars, TTLHistorySize);
-                        _logger.Info("✅ TTL Engine Initialized");
-                        break;
-                        
-                    case TriggerMode.Kinematic_Jerk:
-                        _jerkEngine = new JerkEngine(JerkThreshold, _atr);
-                        _logger.Info("✅ Jerk Engine Initialized");
-                        break;
-                        
-                    case TriggerMode.Permutation_Entropy:
-                        _entropyEngine = new EntropyEngine(EntropyThreshold);
-                        _logger.Info("✅ Entropy Engine Initialized");
-                        break;
-                        
-                    case TriggerMode.Hybrid_Jerk_Entropy:
-                        _jerkEngine = new JerkEngine(JerkThreshold, _atr);
-                        _entropyEngine = new EntropyEngine(EntropyThreshold);
-                        _logger.Info("✅ Hybrid Engine Initialized (Jerk + Entropy)");
-                        break;
-                }
-                
-                int lookback = Math.Min(300, Bars.Count);
+                // محاسبه داده‌های تاریخی
+                int lookback = Math.Min(300, Bars.Count); // کاهش از 500 به 300
                 int startIndex = Math.Max(0, Bars.Count - lookback);
                 
                 _logger.Info($"⏳ Warming up indicators (Last {lookback} bars)...");
@@ -836,8 +530,10 @@ namespace cAlgo.Robots
                 
                 _logger.Info($"✅ Ready - {Bars.Count} bars processed");
                 
+                // ثبت events
                 Positions.Closed += OnPositionClosed;
                 
+                // Dashboard
                 if (ShowDashboard)
                 {
                     InitializeDashboard();
@@ -851,6 +547,10 @@ namespace cAlgo.Robots
                 Stop();
             }
         }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // Helper: محاسبه ضرایب SuperSmoother
+        // ════════════════════════════════════════════════════════════════════════
         
         private void CalculateSuperSmootherCoefficients(int length, out double c1, out double c2, out double c3)
         {
@@ -866,48 +566,56 @@ namespace cAlgo.Robots
         // ════════════════════════════════════════════════════════════════════════
         // ON TICK
         // ════════════════════════════════════════════════════════════════════════
-        
+        private DateTime _lastDashUpdate;
         protected override void OnTick()
         {
             try
             {
-                // Update Trigger Engines (if applicable)
-                if (SelectedTrigger == TriggerMode.TTL_Legacy)
-                {
-                    _legacyTip?.OnTick();
-                }
+                // شمارش Buy/Sell Ticks
+                double currentAsk = Symbol.Ask;
                 
+                if (currentAsk > _lastAsk)
+                    _buyTicks++;
+                else if (currentAsk < _lastAsk)
+                    _sellTicks++;
+                
+                _lastAsk = currentAsk;
+                
+                // مدیریت معاملات باز
                 if (TradingEnabled && _activeTrades.Count > 0)
                 {
                     ManagePositions();
                 }
                 
+                // به‌روزرسانی Toxicity - فقط اگر فعال باشد
                 if (EnableToxicityGuard)
                 {
                     UpdateToxicity();
                 }
                 
-                if (_pendingSignal.HasValue && !_tradeTaken)
+                // چک کردن سیگنال در انتظار - فقط اگر TIP فعال باشد
+                if (EnableTrigger && _pendingSignal.HasValue && !_tradeTaken)
                 {
                     CheckTriggerExecution();
                 }
                 
-                if (ShowDashboard && (Server.Time - _lastDashUpdate).TotalSeconds >= 1)
-                {
-                    try 
-                    { 
-                        UpdateDashboard(); 
-                        _lastDashUpdate = Server.Time; 
-                    } 
-                    catch { }
-                }
-            }
+               
+        // 🛑 اصلاح شده: لگ‌گیر داشبورد (فقط هر ۱ ثانیه آپدیت شو)
+           if (ShowDashboard && (Server.Time - _lastDashUpdate).TotalSeconds >= 1)
+        {
+            try 
+            { 
+                UpdateDashboard(); 
+                _lastDashUpdate = Server.Time; 
+            } 
+            catch { }
+        }
+    }
             catch (Exception ex)
             {
                 _logger.Error("Error in OnTick", ex);
             }
-        }
-        
+ }
         // ════════════════════════════════════════════════════════════════════════
         // ON BAR
         // ════════════════════════════════════════════════════════════════════════
@@ -918,43 +626,27 @@ namespace cAlgo.Robots
             {
                 int index = Bars.Count - 1;
                 
+                // محاسبه اندیکاتورها
                 CalculateTrend(index);
                 CalculateFD(index);
                 UpdateDualPZero(index);
                 
-                // ════════════════════════════════════════════════════════════════
-                // Update Trigger Engines (MODULAR DISPATCH)
-                // ════════════════════════════════════════════════════════════════
-                
-                double closePrice = Bars.ClosePrices[index];
-                
-                switch (SelectedTrigger)
+                // محاسبه TIP - فقط اگر فعال باشد
+                if (EnableTrigger)
                 {
-                    case TriggerMode.TTL_Legacy:
-                        _legacyTip?.OnBar(Bars);
-                        break;
-                        
-                    case TriggerMode.Kinematic_Jerk:
-                        _jerkEngine?.OnBar(closePrice);
-                        break;
-                        
-                    case TriggerMode.Permutation_Entropy:
-                        _entropyEngine?.OnBar(closePrice);
-                        break;
-                        
-                    case TriggerMode.Hybrid_Jerk_Entropy:
-                        _jerkEngine?.OnBar(closePrice);
-                        _entropyEngine?.OnBar(closePrice);
-                        break;
+                    CalculateTIP();
                 }
                 
+                // شکار قله فرکتالی
                 DetectFractalPeak(index);
                 
+                // بررسی شرایط ورود
                 if (TradingEnabled)
                 {
                     CheckEntry(index);
                 }
                 
+                // رسم P-Zero
                 if (ShowDashboard)
                 {
                     DrawPZeroMarkers();
@@ -967,7 +659,7 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CALCULATE TREND
+        // CALCULATE TREND - موتور تشخیص روند (Slope یا Cross)
         // ════════════════════════════════════════════════════════════════════════
         
         private void CalculateTrend(int index)
@@ -976,59 +668,56 @@ namespace cAlgo.Robots
             {
                 _fastSmooth[index] = Bars.ClosePrices[index];
                 _slowSmooth[index] = Bars.ClosePrices[index];
-                _trailingSmooth[index] = Bars.ClosePrices[index];
                 _trendState[index] = 0;
                 return;
             }
             
             try
             {
+                // محاسبه Fast SuperSmoother
                 double priceAvgFast = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
                 
                 _fastSmooth[index] = _c1Fast * priceAvgFast
                                    + _c2Fast * _fastSmooth[index - 1]
                                    + _c3Fast * _fastSmooth[index - 2];
                 
-                double priceAvgTrailing = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
-                
-                _trailingSmooth[index] = _c1Trailing * priceAvgTrailing
-                                       + _c2Trailing * _trailingSmooth[index - 1]
-                                       + _c3Trailing * _trailingSmooth[index - 2];
-                
                 if (TrendDetectionMode == TrendMode.Slope)
                 {
+                    // حالت Slope: مقایسه مقدار فعلی با قبلی
                     if (_fastSmooth[index] > _fastSmooth[index - 1])
                     {
-                        _trendState[index] = 1;
+                        _trendState[index] = 1;  // صعودی
                     }
                     else if (_fastSmooth[index] < _fastSmooth[index - 1])
                     {
-                        _trendState[index] = -1;
+                        _trendState[index] = -1;  // نزولی
                     }
                     else
                     {
-                        _trendState[index] = 0;
+                        _trendState[index] = 0;  // خنثی
                     }
                 }
-                else
+                else // TrendMode.Cross
                 {
+                    // محاسبه Slow SuperSmoother
                     double priceAvgSlow = (Bars.ClosePrices[index] + Bars.ClosePrices[index - 1]) / 2.0;
                     
                     _slowSmooth[index] = _c1Slow * priceAvgSlow
                                        + _c2Slow * _slowSmooth[index - 1]
                                        + _c3Slow * _slowSmooth[index - 2];
                     
+                    // مقایسه Fast و Slow
                     if (_fastSmooth[index] > _slowSmooth[index])
                     {
-                        _trendState[index] = 1;
+                        _trendState[index] = 1;  // صعودی
                     }
                     else if (_fastSmooth[index] < _slowSmooth[index])
                     {
-                        _trendState[index] = -1;
+                        _trendState[index] = -1;  // نزولی
                     }
                     else
                     {
-                        _trendState[index] = 0;
+                        _trendState[index] = 0;  // خنثی
                     }
                 }
             }
@@ -1040,98 +729,103 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CALCULATE FD
+        // CALCULATE FD - محاسبه Fractal Dimension با الگوریتم Higuchi (OPTIMIZED)
         // ════════════════════════════════════════════════════════════════════════
         
-        private void CalculateFD(int index)
+       private void CalculateFD(int index)
+{
+    if (index < WindowSize - 1)
+    {
+        _fractalDimension[index] = 1.0;
+        return;
+    }
+    
+    try
+    {
+        // 🛑 اصلاح شده: استفاده مجدد از لیست‌های کلاس (بدون new کردن)
+        _xValues.Clear();
+        _yValues.Clear();
+        
+        int startIdx = index - WindowSize + 1;
+        
+        for (int k = 1; k <= MaxK; k++)
         {
-            if (index < WindowSize - 1)
+            double lengthSum = 0.0;
+            int validSubsets = 0;
+            
+            for (int m = 0; m < k; m++)
             {
-                _fractalDimension[index] = 1.0;
-                return;
+                double Lmk = 0.0;
+                int points = (WindowSize - m - 1) / k;
+                
+                if (points < 1)
+                    continue;
+                
+                for (int i = 1; i <= points; i++)
+                {
+                    int currIdx = startIdx + m + i * k;
+                    int prevIdx = startIdx + m + (i - 1) * k;
+                    
+                    if (currIdx >= Bars.Count || prevIdx >= Bars.Count)
+                        continue;
+                    
+                    Lmk += Math.Abs(Bars.ClosePrices[currIdx] - Bars.ClosePrices[prevIdx]);
+                }
+                
+                double norm = (WindowSize - 1.0) / (points * k * k);
+                lengthSum += Lmk * norm;
+                validSubsets++;
             }
             
-            try
+            if (validSubsets > 0)
             {
-                _xValues.Clear();
-                _yValues.Clear();
-                
-                int startIdx = index - WindowSize + 1;
-                
-                for (int k = 1; k <= MaxK; k++)
+                double avgLk = lengthSum / validSubsets;
+                if (avgLk > 0 && !double.IsNaN(avgLk) && !double.IsInfinity(avgLk))
                 {
-                    double lengthSum = 0.0;
-                    int validSubsets = 0;
-                    
-                    for (int m = 0; m < k; m++)
-                    {
-                        double Lmk = 0.0;
-                        int points = (WindowSize - m - 1) / k;
-                        
-                        if (points < 1)
-                            continue;
-                        
-                        for (int i = 1; i <= points; i++)
-                        {
-                            int currIdx = startIdx + m + i * k;
-                            int prevIdx = startIdx + m + (i - 1) * k;
-                            
-                            if (currIdx >= Bars.Count || prevIdx >= Bars.Count)
-                                continue;
-                            
-                            Lmk += Math.Abs(Bars.ClosePrices[currIdx] - Bars.ClosePrices[prevIdx]);
-                        }
-                        
-                        double norm = (WindowSize - 1.0) / (points * k * k);
-                        lengthSum += Lmk * norm;
-                        validSubsets++;
-                    }
-                    
-                    if (validSubsets > 0)
-                    {
-                        double avgLk = lengthSum / validSubsets;
-                        if (avgLk > 0 && !double.IsNaN(avgLk) && !double.IsInfinity(avgLk))
-                        {
-                            _xValues.Add(Math.Log(1.0 / k));
-                            _yValues.Add(Math.Log(avgLk));
-                        }
-                    }
+                    _xValues.Add(Math.Log(1.0 / k));
+                    _yValues.Add(Math.Log(avgLk));
                 }
-                
-                if (_xValues.Count < 2)
-                {
-                    _fractalDimension[index] = 1.0;
-                    return;
-                }
-                
-                double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
-                int n = _xValues.Count;
-                
-                for (int i = 0; i < n; i++)
-                {
-                    sumX += _xValues[i];
-                    sumY += _yValues[i];
-                    sumXY += _xValues[i] * _yValues[i];
-                    sumX2 += _xValues[i] * _xValues[i];
-                }
-                
-                double denom = n * sumX2 - sumX * sumX;
-                
-                if (Math.Abs(denom) < 1e-10)
-                {
-                    _fractalDimension[index] = 1.0;
-                    return;
-                }
-                
-                double fd = (n * sumXY - sumX * sumY) / denom;
-                _fractalDimension[index] = Math.Max(1.0, Math.Min(2.0, fd));
-            }
-            catch (Exception ex)
-            {
-                _fractalDimension[index] = 1.0;
-                _logger.Error($"Error in CalculateFD at {index}", ex);
             }
         }
+        
+        // Linear Regression
+        if (_xValues.Count < 2)
+        {
+            _fractalDimension[index] = 1.0;
+            return;
+        }
+        
+        double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+        int n = _xValues.Count;
+        
+        for (int i = 0; i < n; i++)
+        {
+            sumX += _xValues[i];
+            sumY += _yValues[i];
+            sumXY += _xValues[i] * _yValues[i];
+            sumX2 += _xValues[i] * _xValues[i];
+        }
+        
+        double denom = n * sumX2 - sumX * sumX;
+        
+        if (Math.Abs(denom) < 1e-10)
+        {
+            _fractalDimension[index] = 1.0;
+            return;
+        }
+        
+        double fd = (n * sumXY - sumX * sumY) / denom;
+        _fractalDimension[index] = Math.Max(1.0, Math.Min(2.0, fd));
+    }
+    catch (Exception ex)
+    {
+        _fractalDimension[index] = 1.0;
+        _logger.Error($"Error in CalculateFD at {index}", ex);
+    }
+}
+        // ════════════════════════════════════════════════════════════════════════
+        // UPDATE DUAL P-ZERO - به‌روزرسانی P-Zero دوگانه
+        // ════════════════════════════════════════════════════════════════════════
         
         private void UpdateDualPZero(int index)
         {
@@ -1140,6 +834,7 @@ namespace cAlgo.Robots
             
             try
             {
+                // پیدا کردن بالاترین High (برای Buy)
                 _pZeroBuy = Bars.HighPrices[index];
                 
                 int startBuy = Math.Max(0, index - PZeroLookback + 1);
@@ -1149,6 +844,7 @@ namespace cAlgo.Robots
                         _pZeroBuy = Bars.HighPrices[i];
                 }
                 
+                // پیدا کردن پایین‌ترین Low (برای Sell)
                 _pZeroSell = Bars.LowPrices[index];
                 
                 int startSell = Math.Max(0, index - PZeroLookback + 1);
@@ -1164,35 +860,50 @@ namespace cAlgo.Robots
             }
         }
         
+        // ════════════════════════════════════════════════════════════════════════
+        // DETECT FRACTAL PEAK - شکارچی قله فرکتالی (FIXED LOGIC)
+        // ════════════════════════════════════════════════════════════════════════
+        
         private void DetectFractalPeak(int index)
         {
             try
             {
                 double currentFD = _fractalDimension[index];
                 
+                // ─────────────────────────────────────────────────────
+                // 1. ثبت شروع آشوب
+                // ─────────────────────────────────────────────────────
                 if (!_chaosActive && currentFD >= ChaosThreshold)
                 {
                     _chaosActive = true;
                     _chaosStartPrice = Bars.ClosePrices[index];
                     _chaosStartBar = index;
-                    _tradeTaken = false;
+                    _tradeTaken = false;  // ریست پرچم معامله
                     
                     _logger.Info($"🌀 CHAOS STARTED - Bar: {index}, Price: {_chaosStartPrice:F5}, FD: {currentFD:F3}");
                 }
                 
+                // ─────────────────────────────────────────────────────
+                // 2. اضافه کردن به بافر FD
+                // ─────────────────────────────────────────────────────
                 _fdBuffer.Enqueue(currentFD);
                 
                 if (_fdBuffer.Count > _fdBufferSize)
                     _fdBuffer.Dequeue();
                 
+                // ─────────────────────────────────────────────────────
+                // 3. چک کردن شرط ویلیامز (Williams Fractal)
+                // ─────────────────────────────────────────────────────
                 if (_fdBuffer.Count == _fdBufferSize)
                 {
                     var fdArray = _fdBuffer.ToArray();
                     int middleIndex = FractalPeriod;
                     double middleValue = fdArray[middleIndex];
                     
+                    // چک کردن: آیا مقدار وسط از همه بزرگتر است؟
                     bool isPeak = true;
                     
+                    // چک کردن سمت چپ
                     for (int i = 0; i < middleIndex; i++)
                     {
                         if (fdArray[i] >= middleValue)
@@ -1202,6 +913,7 @@ namespace cAlgo.Robots
                         }
                     }
                     
+                    // چک کردن سمت راست
                     if (isPeak)
                     {
                         for (int i = middleIndex + 1; i < _fdBufferSize; i++)
@@ -1214,19 +926,28 @@ namespace cAlgo.Robots
                         }
                     }
                     
+                    // ─────────────────────────────────────────────────
+                    // 4. قله پیدا شد؟ - FIXED: ذخیره قیمت در لحظه قله
+                    // ─────────────────────────────────────────────────
                     if (isPeak && _chaosActive)
                     {
+                        // محاسبه بار مربوط به قله (FractalPeriod بار قبل)
                         int peakBarIndex = index - FractalPeriod;
                         
+                        // چک کردن: آیا این قله بعد از شروع آشوب است؟
                         if (peakBarIndex >= _chaosStartBar)
                         {
+                            // چک کردن: آیا مقدار قله بالای خط قرمز است؟
                             if (middleValue >= ChaosThreshold)
                             {
                                 _fractalPeakDetected = true;
                                 _peakFD = middleValue;
+                                
+                                // ✅ FIXED: ذخیره قیمت در لحظه قله، نه قیمت فعلی
                                 _peakPrice = Bars.ClosePrices[peakBarIndex];
                                 _peakBar = peakBarIndex;
                                 
+                                // رسم فلش بنفش روی چارت
                                 if (ShowDashboard)
                                 {
                                     string arrowName = $"FractalPeak_{peakBarIndex}";
@@ -1246,313 +967,113 @@ namespace cAlgo.Robots
         }
         
         // ════════════════════════════════════════════════════════════════════════
-        // CHECK ENTRY (MODULAR TRAFFIC COP)
+        // CALCULATE TIP - محاسبه Tick Imbalance Pressure
         // ════════════════════════════════════════════════════════════════════════
         
-        private void CheckEntry(int index)
+        private void CalculateTIP()
         {
+            int total = _buyTicks + _sellTicks;
+            
+            if (total == 0)
+            {
+                _currentTIP = 0;
+                _normalizedTIP = 0;
+                return;
+            }
+            
             try
             {
-                if (Positions.Count >= MaxPositions)
-                    return;
+                // محاسبه TIM
+                double TIM = (double)(_buyTicks - _sellTicks) / total;
                 
-                if (Positions.Any(p => p.Label == MagicNumber.ToString()))
-                    return;
+                // محاسبه Price Range
+                int idx = Bars.Count - 1;
+                int lookback = Math.Min(TIPLookbackBars, idx);
                 
-                if (_tradeTaken)
-                    return;
-                
-                if (!_fractalPeakDetected)
-                    return;
-                
-                int trend = (int)_trendState[index];
-                
-                if (trend == 0)
-                    return;
-                
-                TradeType? signal = null;
-                string scenario = "";
-                
-                if (trend == 1)
+                if (lookback < 1)
                 {
-                    if (_peakPrice < _chaosStartPrice)
-                    {
-                        signal = TradeType.Buy;
-                        scenario = "CORRECTION (Price dropped)";
-                    }
-                    else if (_peakPrice > _chaosStartPrice)
-                    {
-                        signal = TradeType.Sell;
-                        scenario = "REVERSAL (Price spiked against trend)";
-                        
-                        var openBuy = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Buy);
-                        if (openBuy != null)
-                        {
-                            _logger.Warning($"⚠️ REVERSAL DETECTED - Closing BUY position");
-                            ClosePositionSafe(openBuy);
-                        }
-                    }
+                    _currentTIP = 0;
+                    _normalizedTIP = 0;
+                    _buyTicks = 0;
+                    _sellTicks = 0;
+                    return;
                 }
-                else if (trend == -1)
+                
+                double high = Bars.HighPrices[idx];
+                double low = Bars.LowPrices[idx];
+                
+                for (int i = 1; i <= lookback; i++)
                 {
-                    if (_peakPrice > _chaosStartPrice)
+                    int id = idx - i;
+                    if (id >= 0)
                     {
-                        signal = TradeType.Sell;
-                        scenario = "CORRECTION (Price rose)";
-                    }
-                    else if (_peakPrice < _chaosStartPrice)
-                    {
-                        signal = TradeType.Buy;
-                        scenario = "REVERSAL (Price dropped against trend)";
-                        
-                        var openSell = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Sell);
-                        if (openSell != null)
-                        {
-                            _logger.Warning($"⚠️ REVERSAL DETECTED - Closing SELL position");
-                            ClosePositionSafe(openSell);
-                        }
+                        if (Bars.HighPrices[id] > high)
+                            high = Bars.HighPrices[id];
+                        if (Bars.LowPrices[id] < low)
+                            low = Bars.LowPrices[id];
                     }
                 }
                 
-                if (!signal.HasValue)
-                    return;
+                double range = high - low;
                 
-                if (EnableToxicityGuard)
+                // محاسبه PS
+                double PS = Math.Max(0.000001, range / total);
+                
+                // محاسبه BAA
+                double BAA = TIM >= 0 ? 
+                    (double)_buyTicks / total : 
+                    (double)_sellTicks / total;
+                
+                // محاسبه TIP
+                _currentTIP = (Math.Abs(TIM) * BAA) / PS;
+                
+                // Normalization - Z-Score
+                _tipHistory.Enqueue(_currentTIP);
+                
+                if (_tipHistory.Count > TIPHistorySize)
+                    _tipHistory.Dequeue();
+                
+                if (_tipHistory.Count >= 30)
                 {
-                    if (!_isWarmedUp || !_marketSafe)
+                    double[] hist = _tipHistory.ToArray();
+                    double mean = hist.Average();
+                    double variance = hist.Sum(t => (t - mean) * (t - mean)) / hist.Length;
+                    double std = Math.Sqrt(variance);
+                    
+                    if (std > 1e-10)
                     {
-                        _logger.Warning($"⚠️ Signal [{scenario}] BLOCKED - TOXIC market (Score: {_toxicityScore:F2})");
-                        return;
+                        _normalizedTIP = (_currentTIP - mean) / std;
                     }
-                }
-                
-                // ════════════════════════════════════════════════════════════════
-                // THE TRAFFIC COP: Modular Trigger Dispatch
-                // ════════════════════════════════════════════════════════════════
-                
-                bool isTriggerValid = false;
-                double triggerValueDisplay = 0;
-                
-                switch (SelectedTrigger)
-                {
-                    case TriggerMode.TTL_Legacy:
-                        triggerValueDisplay = _legacyTip.ZScore;
-                        isTriggerValid = _legacyTip.IsTriggered;
-                        break;
-                        
-                    case TriggerMode.Kinematic_Jerk:
-                        triggerValueDisplay = _jerkEngine.Value;
-                        isTriggerValid = _jerkEngine.IsTriggered;
-                        break;
-                        
-                    case TriggerMode.Permutation_Entropy:
-                        triggerValueDisplay = _entropyEngine.Value;
-                        isTriggerValid = _entropyEngine.IsSafe;
-                        break;
-                        
-                    case TriggerMode.Hybrid_Jerk_Entropy:
-                        double jerkVal = _jerkEngine.Value;
-                        double peVal = _entropyEngine.Value;
-                        
-                        triggerValueDisplay = jerkVal;
-                        
-                        bool hasShock = _jerkEngine.IsTriggered;
-                        bool isOrdered = _entropyEngine.IsSafe;
-                        
-                        isTriggerValid = hasShock && isOrdered;
-                        break;
-                }
-                
-                _logger.Info("════════════════════════════════════════");
-                _logger.Info($"🎯 SIGNAL DETECTED: {scenario}");
-                _logger.Info($"  Direction: {signal.Value}");
-                _logger.Info($"  Trend: {(trend == 1 ? "UP" : "DOWN")}");
-                _logger.Info($"  Peak Price: {_peakPrice:F5}");
-                _logger.Info($"  Start Price: {_chaosStartPrice:F5}");
-                _logger.Info($"  Price Delta: {(_peakPrice - _chaosStartPrice):F5}");
-                _logger.Info($"  Peak FD: {_peakFD:F3}");
-                _logger.Info($"  Trigger Mode: {SelectedTrigger}");
-                _logger.Info($"  Trigger Value: {triggerValueDisplay:F3}");
-                _logger.Info($"  Trigger Valid: {isTriggerValid}");
-                _logger.Info("════════════════════════════════════════");
-                
-                if (isTriggerValid)
-                {
-                    ExecuteTrade(signal.Value, scenario);
-                    _tradeTaken = true;
-                    _fractalPeakDetected = false;
-                    _pendingSignal = null;
+                    else
+                    {
+                        _normalizedTIP = 0;
+                    }
                 }
                 else
                 {
-                    _pendingSignal = signal.Value;
-                    _logger.Info($"⏳ Waiting for Trigger confirmation...");
+                    _normalizedTIP = 0;
                 }
             }
             catch (Exception ex)
             {
-                _logger.Error("Error in CheckEntry", ex);
+                _currentTIP = 0;
+                _normalizedTIP = 0;
+                _logger.Error("Error in CalculateTIP", ex);
+            }
+            finally
+            {
+                _buyTicks = 0;
+                _sellTicks = 0;
             }
         }
         
-        private void CheckTriggerExecution()
-        {
-            try
-            {
-                if (!_pendingSignal.HasValue)
-                    return;
-                
-                bool isTriggerValid = false;
-                
-                switch (SelectedTrigger)
-                {
-                    case TriggerMode.TTL_Legacy:
-                        isTriggerValid = _legacyTip.IsTriggered;
-                        break;
-                        
-                    case TriggerMode.Kinematic_Jerk:
-                        isTriggerValid = _jerkEngine.IsTriggered;
-                        break;
-                        
-                    case TriggerMode.Permutation_Entropy:
-                        isTriggerValid = _entropyEngine.IsSafe;
-                        break;
-                        
-                    case TriggerMode.Hybrid_Jerk_Entropy:
-                        isTriggerValid = _jerkEngine.IsTriggered && _entropyEngine.IsSafe;
-                        break;
-                }
-                
-                if (isTriggerValid)
-                {
-                    _logger.Info($"🔥 TRIGGER CONFIRMED - {SelectedTrigger}");
-                    
-                    ExecuteTrade(_pendingSignal.Value, "Trigger Confirmed");
-                    _tradeTaken = true;
-                    _fractalPeakDetected = false;
-                    _pendingSignal = null;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Error("Error in CheckTriggerExecution", ex);
-            }
-        }
-        
-        private double NormalizeVolume(double targetVolume)
-        {
-            if (targetVolume <= 0) return 0;
-
-            double step = Symbol.VolumeInUnitsStep;
-            double min = Symbol.VolumeInUnitsMin;
-            double max = Symbol.VolumeInUnitsMax;
-
-            double normalized = Math.Round(targetVolume / step) * step;
-
-            if (normalized < min) return 0;
-            if (normalized > max) return max;
-
-            return normalized;
-        }
-        
-        private void ExecuteTrade(TradeType direction, string scenario)
-        {
-            try
-            {
-                double price = direction == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
-                double pZero = direction == TradeType.Buy ? _pZeroBuy : _pZeroSell;
-                double stretch = Math.Abs(price - pZero);
-                
-                double stopLossPrice;
-                if (direction == TradeType.Buy)
-                {
-                    stopLossPrice = _pZeroSell - Symbol.PipSize;
-                }
-                else
-                {
-                    stopLossPrice = _pZeroBuy + Symbol.PipSize;
-                }
-                
-                double slDist = Math.Abs(price - stopLossPrice);
-                
-                double minSL = MinStopLossPips * Symbol.PipSize;
-                slDist = Math.Max(slDist, minSL);
-                
-                double slPips = slDist / Symbol.PipSize;
-                double risk = Account.Balance * (RiskPercent / 100.0);
-                double volume = risk / (slPips * Symbol.PipValue);
-                
-                volume = NormalizeVolume(volume);
-                
-                if (volume < Symbol.VolumeInUnitsMin)
-                {
-                    _logger.Warning($"Volume too small: {volume}");
-                    return;
-                }
-                
-                double tp1 = pZero;
-                double tp2 = direction == TradeType.Buy ? 
-                    price + (stretch * BallisticMultiplier) : 
-                    price - (stretch * BallisticMultiplier);
-                
-                var result = ExecuteMarketOrder(direction, SymbolName, volume, 
-                    MagicNumber.ToString(), null, null);
-                
-                if (result != null && result.IsSuccessful && result.Position != null)
-                {
-                    ModifyPositionSafe(result.Position, stopLossPrice, null);
-                    
-                    lock (_tradesLock)
-                    {
-                        _activeTrades[result.Position.Id] = new TradeContext
-                        {
-                            PositionId = result.Position.Id,
-                            EntryPrice = price,
-                            PZero = pZero,
-                            Stretch = stretch,
-                            TP1 = tp1,
-                            TP2 = tp2,
-                            TP1Hit = false,
-                            TP2Hit = false,
-                            TrailingActive = false,
-                            EntryBarIndex = Bars.Count - 1,
-                            EntryTrendState = (int)_trendState[Bars.Count - 1],
-                            Direction = direction,
-                            EntryTime = Server.Time,
-                            OriginalVolume = volume
-                        };
-                    }
-                    
-                    _chaosActive = false;
-                    _fractalPeakDetected = false;
-                    
-                    _logger.Info("════════════════════════════════════════");
-                    _logger.Info($"🚀 TRADE EXECUTED - {scenario}");
-                    _logger.Info($"Position: {result.Position.Id}");
-                    _logger.Info($"Direction: {direction}");
-                    _logger.Info($"Entry: {price:F5}");
-                    _logger.Info($"Volume: {volume / 1000:F2} lots");
-                    _logger.Info($"Stop: {slPips:F1} pips (Min: {MinStopLossPips})");
-                    _logger.Info($"Risk: ${risk:F2}");
-                    _logger.Info($"TP1: {tp1:F5}");
-                    _logger.Info($"TP2: {tp2:F5}");
-                    _logger.Info($"P-Zero: {pZero:F5}");
-                    _logger.Info($"Stretch: {stretch / Symbol.PipSize:F1} pips");
-                    _logger.Info("════════════════════════════════════════");
-                }
-                else
-                {
-                    _logger.Error($"❌ Trade failed: {result?.Error}");
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.Error("Error in ExecuteTrade", ex);
-            }
-        }
+        // ════════════════════════════════════════════════════════════════════════
+        // UPDATE TOXICITY - سیستم گارد اسپرد (FIXED LOGIC)
+        // ════════════════════════════════════════════════════════════════════════
         
         private void UpdateToxicity()
         {
+            // ✅ FIXED: اگر خاموش باشد، همیشه safe و warmed up
             if (!EnableToxicityGuard)
             {
                 _marketSafe = true;
@@ -1562,14 +1083,17 @@ namespace cAlgo.Robots
             
             try
             {
+                // محاسبه Spread لحظه‌ای
                 double bid = Symbol.Bid;
                 double ask = Symbol.Ask;
                 if (bid <= 0 || ask <= 0) return;
                 
                 double currentSpread = (ask - bid) / Symbol.PipSize;
                 
+                // جمع‌آوری دقیقه‌ای
                 _minuteSpreads.Add(currentSpread);
                 
+                // چک کردن تغییر دقیقه
                 int currentMinute = Server.Time.Minute;
                 if (currentMinute != _lastProcessedMinute)
                 {
@@ -1610,6 +1134,7 @@ namespace cAlgo.Robots
                     _lastProcessedMinute = currentMinute;
                 }
                 
+                // محاسبه نهایی
                 if (!_isWarmedUp)
                 {
                     _marketSafe = false;
@@ -1627,6 +1152,279 @@ namespace cAlgo.Robots
                 _marketSafe = false;
             }
         }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // CHECK ENTRY - بررسی شرایط ورود (FIXED LOGIC)
+        // ════════════════════════════════════════════════════════════════════════
+        
+        private void CheckEntry(int index)
+        {
+            try
+            {
+                // بررسی محدودیت معاملات
+                if (Positions.Count >= MaxPositions)
+                    return;
+                
+                if (Positions.Any(p => p.Label == MagicNumber.ToString()))
+                    return;
+                
+                // آیا معامله قبلاً انجام شده؟
+                if (_tradeTaken)
+                    return;
+                
+                // آیا قله فرکتالی شناسایی شده؟
+                if (!_fractalPeakDetected)
+                    return;
+                
+                // گرفتن روند فعلی
+                int trend = (int)_trendState[index];
+                
+                if (trend == 0)
+                    return;
+                
+                // ─────────────────────────────────────────────────────
+                // ✅ FIXED: مقایسه صحیح Peak Price با Start Price
+                // ─────────────────────────────────────────────────────
+                
+                TradeType? signal = null;
+                string scenario = "";
+                
+                if (trend == 1) // روند صعودی
+                {
+                    if (_peakPrice < _chaosStartPrice)
+                    {
+                        // قیمت کاهش یافته → Correction → BUY
+                        signal = TradeType.Buy;
+                        scenario = "CORRECTION (Price dropped)";
+                    }
+                    else if (_peakPrice > _chaosStartPrice)
+                    {
+                        // قیمت افزایش یافته در روند صعودی → ممکن است Reversal باشد → SELL
+                        signal = TradeType.Sell;
+                        scenario = "REVERSAL (Price spiked against trend)";
+                        
+                        // بستن پوزیشن Buy باز (اگر وجود دارد)
+                        var openBuy = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Buy);
+                        if (openBuy != null)
+                        {
+                            _logger.Warning($"⚠️ REVERSAL DETECTED - Closing BUY position");
+                            ClosePositionSafe(openBuy);
+                        }
+                    }
+                }
+                else if (trend == -1) // روند نزولی
+                {
+                    if (_peakPrice > _chaosStartPrice)
+                    {
+                        // قیمت افزایش یافته → Correction → SELL
+                        signal = TradeType.Sell;
+                        scenario = "CORRECTION (Price rose)";
+                    }
+                    else if (_peakPrice < _chaosStartPrice)
+                    {
+                        // قیمت کاهش یافته در روند نزولی → ممکن است Reversal باشد → BUY
+                        signal = TradeType.Buy;
+                        scenario = "REVERSAL (Price dropped against trend)";
+                        
+                        // بستن پوزیشن Sell باز (اگر وجود دارد)
+                        var openSell = Positions.FirstOrDefault(p => p.Label == MagicNumber.ToString() && p.TradeType == TradeType.Sell);
+                        if (openSell != null)
+                        {
+                            _logger.Warning($"⚠️ REVERSAL DETECTED - Closing SELL position");
+                            ClosePositionSafe(openSell);
+                        }
+                    }
+                }
+                
+                if (!signal.HasValue)
+                    return;
+                
+                // ─────────────────────────────────────────────────────
+                // ✅ FIXED: چک کردن Toxicity (فقط اگر فعال باشد)
+                // ─────────────────────────────────────────────────────
+                if (EnableToxicityGuard)
+                {
+                    if (!_isWarmedUp || !_marketSafe)
+                    {
+                        _logger.Warning($"⚠️ Signal [{scenario}] BLOCKED - TOXIC market (Score: {_toxicityScore:F2})");
+                        return;
+                    }
+                }
+                
+                // ─────────────────────────────────────────────────────
+                // ✅ FIXED: اجرا یا انتظار برای Trigger
+                // ─────────────────────────────────────────────────────
+                
+                _logger.Info("════════════════════════════════════════");
+                _logger.Info($"🎯 SIGNAL DETECTED: {scenario}");
+                _logger.Info($"  Direction: {signal.Value}");
+                _logger.Info($"  Trend: {(trend == 1 ? "UP" : "DOWN")}");
+                _logger.Info($"  Peak Price: {_peakPrice:F5}");
+                _logger.Info($"  Start Price: {_chaosStartPrice:F5}");
+                _logger.Info($"  Price Delta: {(_peakPrice - _chaosStartPrice):F5}");
+                _logger.Info($"  Peak FD: {_peakFD:F3}");
+                _logger.Info("════════════════════════════════════════");
+                
+                if (EnableTrigger)
+                {
+                    // ذخیره سیگنال برای چک کردن در OnTick
+                    _pendingSignal = signal.Value;
+                    _logger.Info($"⏳ Waiting for TIP confirmation (Threshold: {TIPZScoreThreshold})...");
+                }
+                else
+                {
+                    // ✅ FIXED: اجرای مستقیم اگر TIP خاموش باشد
+                    ExecuteTrade(signal.Value, scenario);
+                    _tradeTaken = true;
+                    _fractalPeakDetected = false;  // ریست قله
+                    _pendingSignal = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error("Error in CheckEntry", ex);
+            }
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // CHECK TRIGGER EXECUTION - چک کردن TIP برای اجرای سیگنال
+        // ════════════════════════════════════════════════════════════════════════
+        
+        private void CheckTriggerExecution()
+        {
+            try
+            {
+                if (!_pendingSignal.HasValue)
+                    return;
+                
+                // چک کردن TIP Z-Score
+                if (_normalizedTIP >= TIPZScoreThreshold)
+                {
+                    _logger.Info($"🔥 TIP CONFIRMED - Z-Score: {_normalizedTIP:F2}");
+                    
+                    ExecuteTrade(_pendingSignal.Value, "TIP Triggered");
+                    _tradeTaken = true;
+                    _fractalPeakDetected = false;  // ریست قله
+                    _pendingSignal = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error("Error in CheckTriggerExecution", ex);
+            }
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // EXECUTE TRADE - اجرای معامله (FIXED STOP LOSS)
+        // ════════════════════════════════════════════════════════════════════════
+        
+        private void ExecuteTrade(TradeType direction, string scenario)
+        {
+            try
+            {
+                double price = direction == TradeType.Buy ? Symbol.Ask : Symbol.Bid;
+                double pZero = direction == TradeType.Buy ? _pZeroBuy : _pZeroSell;
+                double stretch = Math.Abs(price - pZero);
+                
+                // ✅ FIXED: محاسبه Stop Loss با حداقل مطلق
+                double slDist;
+                
+                if (UseDynamicStopLoss && _atr != null && !double.IsNaN(_atr.Result.LastValue))
+                {
+                    // Dynamic SL based on ATR
+                    double atrValue = _atr.Result.LastValue;
+                    slDist = atrValue * ATRMultiplier;
+                }
+                else
+                {
+                    // Static SL based on stretch
+                    slDist = stretch * 1.5; // 1.5x stretch
+                }
+                
+                // ✅ FIXED: اعمال حداقل مطلق SL (15 pips)
+                double minSL = MinStopLossPips * Symbol.PipSize;
+                slDist = Math.Max(slDist, minSL);
+                
+                // Position Sizing
+                double slPips = slDist / Symbol.PipSize;
+                double risk = Account.Balance * (RiskPercent / 100.0);
+                double volume = risk / (slPips * Symbol.PipValue);
+                
+                volume = Symbol.NormalizeVolumeInUnits(volume);
+                volume = Math.Max(Symbol.VolumeInUnitsMin, volume);
+                volume = Math.Min(Symbol.VolumeInUnitsMax, volume);
+                
+                if (volume < Symbol.VolumeInUnitsMin)
+                {
+                    _logger.Warning($"Volume too small: {volume}");
+                    return;
+                }
+                
+                // محاسبه Targets
+                double tp1 = pZero;
+                double tp2 = direction == TradeType.Buy ? 
+                    pZero + (stretch * BallisticMultiplier) : 
+                    pZero - (stretch * BallisticMultiplier);
+                
+                // اجرای Order
+                var result = ExecuteMarketOrder(direction, SymbolName, volume, 
+                    MagicNumber.ToString(), slPips, null);
+                
+                if (result != null && result.IsSuccessful && result.Position != null)
+                {
+                    // ثبت Context
+                    lock (_tradesLock)
+                    {
+                        _activeTrades[result.Position.Id] = new TradeContext
+                        {
+                            PositionId = result.Position.Id,
+                            EntryPrice = price,
+                            PZero = pZero,
+                            Stretch = stretch,
+                            TP1 = tp1,
+                            TP2 = tp2,
+                            TP1Hit = false,
+                            TP2Hit = false,
+                            TrailingActive = false,
+                            EntryBarIndex = Bars.Count - 1,
+                            EntryTrendState = (int)_trendState[Bars.Count - 1],
+                            Direction = direction,
+                            EntryTime = Server.Time
+                        };
+                    }
+                    
+                    // ریست متغیرها
+                    _chaosActive = false;
+                    _fractalPeakDetected = false;
+                    
+                    _logger.Info("════════════════════════════════════════");
+                    _logger.Info($"🚀 TRADE EXECUTED - {scenario}");
+                    _logger.Info($"Position: {result.Position.Id}");
+                    _logger.Info($"Direction: {direction}");
+                    _logger.Info($"Entry: {price:F5}");
+                    _logger.Info($"Volume: {volume / 1000:F2} lots");
+                    _logger.Info($"Stop: {slPips:F1} pips (Min: {MinStopLossPips})");
+                    _logger.Info($"Risk: ${risk:F2}");
+                    _logger.Info($"TP1: {tp1:F5}");
+                    _logger.Info($"TP2: {tp2:F5}");
+                    _logger.Info($"P-Zero: {pZero:F5}");
+                    _logger.Info($"Stretch: {stretch / Symbol.PipSize:F1} pips");
+                    _logger.Info("════════════════════════════════════════");
+                }
+                else
+                {
+                    _logger.Error($"❌ Trade failed: {result?.Error}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.Error("Error in ExecuteTrade", ex);
+            }
+        }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // MANAGE POSITIONS - مدیریت معاملات باز
+        // ════════════════════════════════════════════════════════════════════════
         
         private void ManagePositions()
         {
@@ -1654,6 +1452,7 @@ namespace cAlgo.Robots
                     int idx = Bars.Count - 1;
                     int bars = idx - ctx.EntryBarIndex;
                     
+                    // Trend Reversal Exit
                     if (EnableTrendReversalExit && idx >= 0 && idx < _trendState.Count)
                     {
                         int currTrend = (int)_trendState[idx];
@@ -1669,6 +1468,7 @@ namespace cAlgo.Robots
                         }
                     }
                     
+                    // Time Stops
                     if (EnableTimeStops)
                     {
                         if (!ctx.TP1Hit && bars > TimeStop1Bars)
@@ -1690,8 +1490,7 @@ namespace cAlgo.Robots
                         }
                     }
                     
-                    double currentFD = _fractalDimension.LastValue;
-                    
+                    // TP1
                     if (!ctx.TP1Hit)
                     {
                         bool tp1Hit = pos.TradeType == TradeType.Buy ? 
@@ -1699,35 +1498,25 @@ namespace cAlgo.Robots
                         
                         if (tp1Hit)
                         {
-                            ModifyPositionSafe(pos, ctx.EntryPrice, null);
-                            ctx.TP1Hit = true;
-                            ctx.TrailingActive = true;
-                            _logger.Info($"✅ TP1 HIT - Pos {pos.Id}. Breakeven set.");
+                            double closeVol = pos.VolumeInUnits * (TP1Percent / 100.0);
+                            closeVol = Symbol.NormalizeVolumeInUnits(closeVol);
                             
-                            if (SmartExitEnabled)
+                            if (closeVol >= Symbol.VolumeInUnitsMin && closeVol <= pos.VolumeInUnits)
                             {
-                                double closePercent = currentFD < ChaosThresholdFD ? TP1StablePercent : TP1ChaosPercent;
-                                double rawCloseVol = pos.VolumeInUnits * (closePercent / 100.0);
-                                double closeVol = NormalizeVolume(rawCloseVol);
+                                var res = ClosePositionSafe(pos, closeVol);
                                 
-                                double remainingVol = pos.VolumeInUnits - closeVol;
-                                if (closeVol >= Symbol.VolumeInUnitsMin && remainingVol >= Symbol.VolumeInUnitsMin)
+                                if (res != null && res.IsSuccessful)
                                 {
-                                    var res = ClosePositionSafe(pos, closeVol);
-                                    
-                                    if (res != null && res.IsSuccessful)
-                                    {
-                                        _logger.Info($"Partial close at TP1: {closeVol / 1000:F2} lots ({closePercent}%)");
-                                    }
-                                }
-                                else
-                                {
-                                    _logger.Info($"Skipped partial close at TP1: Invalid volume split.");
+                                    ctx.TP1Hit = true;
+                                    ctx.TrailingActive = true;
+                                    ModifyPositionSafe(pos, ctx.EntryPrice, ctx.TP2);
+                                    _logger.Info($"✅ TP1 HIT - Pos {pos.Id}");
                                 }
                             }
                         }
                     }
                     
+                    // TP2
                     if (ctx.TP1Hit && !ctx.TP2Hit)
                     {
                         bool tp2Hit = pos.TradeType == TradeType.Buy ? 
@@ -1735,81 +1524,36 @@ namespace cAlgo.Robots
                         
                         if (tp2Hit)
                         {
-                            if (SmartExitEnabled)
-                            {
-                                if (currentFD >= ChaosThresholdFD)
-                                {
-                                    _logger.Info($"🎯 TP2 HIT (Chaos) - Closing all - Pos {pos.Id}");
-                                    ClosePositionSafe(pos);
-                                    toRemove.Add(ctx.PositionId);
-                                    ctx.TP2Hit = true;
-                                    _perfMonitor?.RecordTrade(pos.NetProfit);
-                                    continue;
-                                }
-                                else
-                                {
-                                    double closePercent = TP2StablePercent;
-                                    double rawCloseVol = ctx.OriginalVolume * (closePercent / 100.0);
-                                    double closeVol = NormalizeVolume(rawCloseVol);
-                                    
-                                    double remainingVol = pos.VolumeInUnits - closeVol;
-                                    if (closeVol >= Symbol.VolumeInUnitsMin && remainingVol >= Symbol.VolumeInUnitsMin)
-                                    {
-                                        var res = ClosePositionSafe(pos, closeVol);
-                                        
-                                        if (res != null && res.IsSuccessful)
-                                        {
-                                            _logger.Info($"Partial close at TP2: {closeVol / 1000:F2} lots ({closePercent}%)");
-                                        }
-                                    }
-                                    else
-                                    {
-                                        _logger.Info($"Skipped partial close at TP2: Invalid volume split.");
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                _logger.Info($"🎯 TP2 HIT - Pos {pos.Id}");
-                                ClosePositionSafe(pos);
-                                toRemove.Add(ctx.PositionId);
-                                ctx.TP2Hit = true;
-                                _perfMonitor?.RecordTrade(pos.NetProfit);
-                                continue;
-                            }
+                            _logger.Info($"🎯 TP2 HIT - Pos {pos.Id}");
+                            ClosePositionSafe(pos);
+                            toRemove.Add(ctx.PositionId);
+                            ctx.TP2Hit = true;
+                            _perfMonitor?.RecordTrade(pos.NetProfit);
+                            continue;
                         }
                     }
                     
-                    if (ctx.TrailingActive)
+                    // Trailing Stop
+                    if (ctx.TrailingActive && _atr != null && !double.IsNaN(_atr.Result.LastValue))
                     {
-                        if (idx >= 2 && !double.IsNaN(_trailingSmooth[idx]))
+                        double trailDist = _atr.Result.LastValue * TrailingATRMultiple;
+                        
+                        if (pos.TradeType == TradeType.Buy)
                         {
-                            double smootherValue = _trailingSmooth[idx];
-                            double distance = Math.Abs(price - smootherValue);
-                            double offset = distance * (TrailingOffsetPercent / 100.0);
-                            
-                            double trailPrice;
-                            if (pos.TradeType == TradeType.Buy)
-                            {
-                                trailPrice = smootherValue - offset;
-                            }
-                            else
-                            {
-                                trailPrice = smootherValue + offset;
-                            }
-                            
-                            bool isCorrectSide = pos.TradeType == TradeType.Buy ? price > smootherValue : price < smootherValue;
-                            bool isRatchet = pos.TradeType == TradeType.Buy ? trailPrice > (pos.StopLoss ?? ctx.EntryPrice) : trailPrice < (pos.StopLoss ?? ctx.EntryPrice);
-                            bool isAboveEntry = pos.TradeType == TradeType.Buy ? trailPrice > ctx.EntryPrice : trailPrice < ctx.EntryPrice;
-                            
-                            if (isCorrectSide && isRatchet && isAboveEntry)
-                            {
-                                ModifyPositionSafe(pos, trailPrice, pos.TakeProfit);
-                            }
+                            double newSL = price - trailDist;
+                            if (pos.StopLoss == null || newSL > pos.StopLoss.Value)
+                                ModifyPositionSafe(pos, newSL, pos.TakeProfit);
+                        }
+                        else
+                        {
+                            double newSL = price + trailDist;
+                            if (pos.StopLoss == null || newSL < pos.StopLoss.Value)
+                                ModifyPositionSafe(pos, newSL, pos.TakeProfit);
                         }
                     }
                 }
                 
+                // پاک‌سازی
                 if (toRemove.Count > 0)
                 {
                     lock (_tradesLock)
@@ -1824,6 +1568,10 @@ namespace cAlgo.Robots
                 _logger.Error("Error in ManagePositions", ex);
             }
         }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // Helper Methods
+        // ════════════════════════════════════════════════════════════════════════
         
         private TradeResult ClosePositionSafe(Position pos, double? volume = null)
         {
@@ -1910,7 +1658,7 @@ namespace cAlgo.Robots
                 Width = 250
             };
             
-            _contentPanel.AddChild(CreateHeader("⚡ HydroDynamic v10.0"));
+            _contentPanel.AddChild(CreateHeader("⚡ HydroDynamic v9.1"));
             
             _contentPanel.AddChild(CreateRow("Guard:", out _valGuard));
             _contentPanel.AddChild(CreateRow("Trend:", out _valTrend));
@@ -1980,6 +1728,7 @@ namespace cAlgo.Robots
         {
             if (!ShowDashboard || _mainBorder == null) return;
             
+            // Guard (Spread)
             double currentSpread = (Symbol.Ask - Symbol.Bid) / Symbol.PipSize;
             
             if (EnableToxicityGuard)
@@ -1993,6 +1742,7 @@ namespace cAlgo.Robots
                 _valGuard.ForegroundColor = _colNeutral;
             }
             
+            // Trend
             int tState = (int)_trendState.Last(0);
             if (tState == 1) 
             {
@@ -2010,6 +1760,7 @@ namespace cAlgo.Robots
                 _valTrend.ForegroundColor = _colNeutral;
             }
             
+            // State
             if (_chaosActive)
             {
                 if (_fractalPeakDetected)
@@ -2029,55 +1780,36 @@ namespace cAlgo.Robots
                 _valState.ForegroundColor = _colNeutral;
             }
             
+            // P-Zero
             _valZeroBuy.Text = _pZeroBuy > 0 ? _pZeroBuy.ToString("F5") : "---";
             _valZeroSell.Text = _pZeroSell > 0 ? _pZeroSell.ToString("F5") : "---";
             
-            // ════════════════════════════════════════════════════════════════
-            // Smart Trigger Display (MODULAR)
-            // ════════════════════════════════════════════════════════════════
-            
-            switch (SelectedTrigger)
+            // Trigger
+            if (EnableTrigger)
             {
-                case TriggerMode.TTL_Legacy:
-                    if (_legacyTip != null)
-                    {
-                        double zScore = _legacyTip.ZScore;
-                        _valTrigger.Text = $"TTL: {zScore:F2}";
-                        _valTrigger.ForegroundColor = _legacyTip.IsTriggered ? _colPositive : Color.Gray;
-                    }
-                    break;
-                    
-                case TriggerMode.Kinematic_Jerk:
-                    if (_jerkEngine != null)
-                    {
-                        double jerkVal = _jerkEngine.Value;
-                        _valTrigger.Text = $"JK: {jerkVal:F2}";
-                        _valTrigger.ForegroundColor = _jerkEngine.IsTriggered ? _colPositive : Color.Gray;
-                    }
-                    break;
-                    
-                case TriggerMode.Permutation_Entropy:
-                    if (_entropyEngine != null)
-                    {
-                        double peVal = _entropyEngine.Value;
-                        _valTrigger.Text = $"PE: {peVal:F2}";
-                        _valTrigger.ForegroundColor = _entropyEngine.IsSafe ? _colPositive : _colWarning;
-                    }
-                    break;
-                    
-                case TriggerMode.Hybrid_Jerk_Entropy:
-                    if (_jerkEngine != null && _entropyEngine != null)
-                    {
-                        double jVal = _jerkEngine.Value;
-                        double pVal = _entropyEngine.Value;
-                        _valTrigger.Text = $"J:{jVal:F1}|P:{pVal:F2}";
-                        
-                        bool bothValid = _jerkEngine.IsTriggered && _entropyEngine.IsSafe;
-                        _valTrigger.ForegroundColor = bothValid ? _colPositive : Color.Gray;
-                    }
-                    break;
+                if (_pendingSignal.HasValue)
+                {
+                    _valTrigger.Text = $"WAITING ({_normalizedTIP:F1})";
+                    _valTrigger.ForegroundColor = _colWarning;
+                }
+                else if (_normalizedTIP > TIPZScoreThreshold)
+                {
+                    _valTrigger.Text = $"FIRE! (Z:{_normalizedTIP:F1})";
+                    _valTrigger.ForegroundColor = _colPositive;
+                }
+                else
+                {
+                    _valTrigger.Text = $"ON ({_normalizedTIP:F1})";
+                    _valTrigger.ForegroundColor = Color.Gray;
+                }
+            }
+            else
+            {
+                _valTrigger.Text = "OFF (Direct)";
+                _valTrigger.ForegroundColor = _colNeutral;
             }
             
+            // Last Trade
             var lastPos = History.FindLast(MagicNumber.ToString());
             if (lastPos != null)
             {
@@ -2096,6 +1828,7 @@ namespace cAlgo.Robots
             
             int index = Bars.Count - 1;
             
+            // خط P-Zero Buy (سبز)
             if (_pZeroBuy > 0)
             {
                 string objBuy = "PZero_Buy";
@@ -2103,6 +1836,7 @@ namespace cAlgo.Robots
                 Chart.DrawText(objBuy + "_txt", " Buy", index + 5, _pZeroBuy, Color.Lime);
             }
             
+            // خط P-Zero Sell (قرمز)
             if (_pZeroSell > 0)
             {
                 string objSell = "PZero_Sell";
@@ -2121,6 +1855,10 @@ namespace cAlgo.Robots
             Chart.RemoveObject("PZero_Sell");
             Chart.RemoveObject("PZero_Sell_txt");
         }
+        
+        // ════════════════════════════════════════════════════════════════════════
+        // ON STOP
+        // ════════════════════════════════════════════════════════════════════════
         
         protected override void OnStop()
         {
@@ -2170,3 +1908,7 @@ namespace cAlgo.Robots
         }
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// پایان کد - HydroDynamic Trading Bot v9.1 - FIXED & OPTIMIZED
+// ══════════════════════════════════════════════════════════════════════════════
